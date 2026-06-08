@@ -10,5 +10,7 @@ data/raw_teacher_trays/
 data/demo_trays/
 data/classification/
 data/downloads/
+data/scraped_candidates/
+data/temp_teacher_crops/
 ultralytics/
 runs/
