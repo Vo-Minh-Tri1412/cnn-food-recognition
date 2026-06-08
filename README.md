@@ -130,6 +130,34 @@ After `scripts/00_prepare_project.py` copies `Khay_com/` into `data/raw_teacher_
 
 This creates a small, conservative seed dataset from clear teacher-tray crops. It is useful for domain adaptation, but it is not enough for final training by itself.
 
+## Collect Web Image Candidates
+
+If public Kaggle datasets are not useful enough, collect web image candidates into a review folder:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\09_collect_web_images.py --class-name com_trang --per-query 30 --max-downloads-per-class 80
+```
+
+The default provider is DuckDuckGo image search. Bing is available as a fallback:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\09_collect_web_images.py --provider bing --class-name com_trang
+```
+
+Create contact sheets for manual review:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\10_make_review_contact_sheets.py
+```
+
+Open `outputs/reports/scraped_review_sheets/`, delete bad images from `data/scraped_candidates/<class_name>/`, then promote the remaining reviewed images into the train split:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\11_promote_reviewed_images.py --split train
+```
+
+Important: do not promote images before visual review. Web search often returns logos, icons, unrelated dishes, or duplicate photos.
+
 ## Download Public Dataset Notes
 
 Dataset reference notes are in:
