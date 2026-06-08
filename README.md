@@ -52,6 +52,7 @@ scripts/
   05_train_classifier.py
   06_demo_checkout.py
   07_smoke_test.py
+  08_seed_teacher_crops.py
 notebooks/
   00_setup_and_inventory.ipynb
   01_train_classifier.ipynb
@@ -118,6 +119,16 @@ If the JSON regions include labels, add crops directly into the training dataset
 ```
 
 Use `configs/manual_regions.example.json` as the format reference.
+
+## Seed Training Crops From Teacher Images
+
+After `scripts/00_prepare_project.py` copies `Khay_com/` into `data/raw_teacher_trays/`, create the first curated training crops:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\08_seed_teacher_crops.py --split train --clear-existing
+```
+
+This creates a small, conservative seed dataset from clear teacher-tray crops. It is useful for domain adaptation, but it is not enough for final training by itself.
 
 ## Download Public Dataset Notes
 
