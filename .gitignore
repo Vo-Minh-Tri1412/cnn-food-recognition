@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+models/*.pt
+models/*.pth
+models/*.onnx
+outputs/
+data/raw_teacher_trays/
+data/demo_trays/
+data/classification/
+data/downloads/
+ultralytics/
+runs/
