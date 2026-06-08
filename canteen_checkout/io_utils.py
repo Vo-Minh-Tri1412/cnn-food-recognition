@@ -24,6 +24,8 @@ from .config import (
     PRICES_CSV,
     RAW_TEACHER_TRAYS_DIR,
     REPORTS_DIR,
+    SCRAPED_CANDIDATES_DIR,
+    TEMP_TEACHER_CROPS_DIR,
 )
 
 
@@ -42,6 +44,8 @@ def ensure_project_dirs() -> None:
         DEMO_TRAYS_DIR,
         CLASSIFICATION_DIR,
         DOWNLOADS_DIR,
+        SCRAPED_CANDIDATES_DIR,
+        TEMP_TEACHER_CROPS_DIR,
         MODELS_DIR,
         OUTPUTS_DIR,
         CROPPED_DISHES_DIR,
