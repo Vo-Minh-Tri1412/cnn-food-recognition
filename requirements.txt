@@ -1,0 +1,14 @@
+torch
+torchvision
+torchaudio
+ultralytics
+opencv-python
+pandas
+matplotlib
+scikit-learn
+jupyterlab
+ipykernel
+tqdm
+seaborn
+kagglehub
+pyyaml
