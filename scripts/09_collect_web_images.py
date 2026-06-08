@@ -6,6 +6,7 @@ import hashlib
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote_plus, unquote
 
@@ -17,7 +18,7 @@ import requests
 from ddgs import DDGS
 from PIL import Image
 
-from canteen_checkout.config import DISH_CLASSES, SCRAPED_CANDIDATES_DIR
+from canteen_checkout.config import DISH_CLASSES, PROJECT_ROOT, SCRAPED_CANDIDATES_DIR, SCRAPED_MANIFEST_CSV
 
 
 HEADERS = {
@@ -39,6 +40,40 @@ def read_queries(path: Path) -> list[tuple[str, str]]:
             if query:
                 rows.append((class_name, query))
     return rows
+
+
+def relative_or_absolute(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
+def append_manifest_row(path: Path, row: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    exists = path.exists()
+    fields = [
+        "class_name",
+        "query",
+        "source_url",
+        "image_url",
+        "file_path",
+        "provider",
+        "download_time",
+    ]
+    with path.open("a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        if not exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def refine_query(query: str, *, strict_phrase: bool = False) -> str:
+    negative_terms = "-logo -icon -emoji -clipart -vector -cartoon"
+    query = query.strip()
+    if strict_phrase and not (query.startswith('"') and query.endswith('"')):
+        query = f'"{query}"'
+    return f"{query} {negative_terms}"
 
 
 def find_bing_image_urls(query: str, max_urls: int) -> list[str]:
@@ -125,6 +160,9 @@ def main() -> None:
     parser.add_argument("--sleep", type=float, default=1.0)
     parser.add_argument("--class-name", choices=DISH_CLASSES, default=None)
     parser.add_argument("--provider", choices=["duckduckgo", "bing"], default="duckduckgo")
+    parser.add_argument("--manifest", type=Path, default=SCRAPED_MANIFEST_CSV)
+    parser.add_argument("--strict-phrase", action="store_true", help="Quote each query phrase before adding negative terms.")
+    parser.add_argument("--raw-query", action="store_true", help="Do not append negative terms to search queries.")
     args = parser.parse_args()
 
     queries = read_queries(args.queries)
@@ -134,26 +172,30 @@ def main() -> None:
     counts: dict[str, int] = {}
     args.out.mkdir(parents=True, exist_ok=True)
     for class_name, query in queries:
+        search_query = query if args.raw_query else refine_query(query, strict_phrase=args.strict_phrase)
         class_dir = args.out / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
         counts.setdefault(class_name, len(list(class_dir.glob("*.*"))))
         if counts[class_name] >= args.max_downloads_per_class:
             continue
-        print(f"Searching [{class_name}] {query}")
+        print(f"Searching [{class_name}] {search_query}")
+        provider_used = args.provider
         try:
             if args.provider == "duckduckgo":
-                urls = find_duckduckgo_image_urls(query, args.per_query)
+                urls = find_duckduckgo_image_urls(search_query, args.per_query)
                 if not urls:
                     print("  duckduckgo returned no urls; trying bing fallback")
-                    urls = find_bing_image_urls(query, args.per_query)
+                    urls = find_bing_image_urls(search_query, args.per_query)
+                    provider_used = "bing_fallback"
             else:
-                urls = find_bing_image_urls(query, args.per_query)
+                urls = find_bing_image_urls(search_query, args.per_query)
         except Exception as exc:
             print(f"  search failed: {exc}")
             if args.provider == "duckduckgo":
                 print("  trying bing fallback")
                 try:
-                    urls = find_bing_image_urls(query, args.per_query)
+                    urls = find_bing_image_urls(search_query, args.per_query)
+                    provider_used = "bing_fallback"
                 except Exception as fallback_exc:
                     print(f"  fallback failed: {fallback_exc}")
                     urls = []
@@ -166,6 +208,18 @@ def main() -> None:
             out_path = download_url(url, class_dir, f"{class_name}_{idx:03d}", args.min_size)
             if out_path:
                 counts[class_name] += 1
+                append_manifest_row(
+                    args.manifest,
+                    {
+                        "class_name": class_name,
+                        "query": query,
+                        "source_url": url,
+                        "image_url": url,
+                        "file_path": relative_or_absolute(out_path),
+                        "provider": provider_used,
+                        "download_time": datetime.now().isoformat(timespec="seconds"),
+                    },
+                )
                 print(f"  saved {out_path.name}")
         time.sleep(args.sleep)
 

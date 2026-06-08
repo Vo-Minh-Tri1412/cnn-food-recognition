@@ -11,6 +11,10 @@ data/demo_trays/
 data/classification/
 data/downloads/
 data/scraped_candidates/
+data/processed_candidates/
+data/rejected_candidates/
 data/temp_teacher_crops/
+data/archive/
+data/scraped_manifest.csv
 ultralytics/
 runs/

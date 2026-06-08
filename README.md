@@ -32,6 +32,10 @@ Verified locally:
 data/
   raw_teacher_trays/      # copied images from Khay_com/
   demo_trays/             # small subset for demo runs
+  scraped_candidates/     # web images before manual review
+  processed_candidates/   # normalized images after quality filtering
+  rejected_candidates/    # suspicious images copied/moved out by reason
+  temp_teacher_crops/     # teacher-tray crops kept outside training
   classification/
     train/<class_name>/   # labeled dish crops for training
     val/<class_name>/
@@ -53,6 +57,11 @@ scripts/
   06_demo_checkout.py
   07_smoke_test.py
   08_seed_teacher_crops.py
+  09_collect_web_images.py
+  10_make_review_contact_sheets.py
+  11_promote_reviewed_images.py
+  12_clean_workspace.py
+  13_preprocess_candidates.py
 notebooks/
   00_setup_and_inventory.ipynb
   01_train_classifier.ipynb
@@ -138,10 +147,19 @@ If public Kaggle datasets are not useful enough, collect web image candidates in
 .\.venv\Scripts\python.exe scripts\09_collect_web_images.py --class-name com_trang --per-query 30 --max-downloads-per-class 80
 ```
 
+The crawler writes `data/scraped_manifest.csv` with class, query, source URL, local path, provider, and download time. It also appends negative terms such as `-logo`, `-icon`, and `-emoji` unless `--raw-query` is used.
+
 The default provider is DuckDuckGo image search. Bing is available as a fallback:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\09_collect_web_images.py --provider bing --class-name com_trang
+```
+
+The query file includes teacher-note bias:
+
+```text
+canh_rau: cai, rau muong
+rau_xao: lagim, cu san, dau que, dau dua
 ```
 
 Create contact sheets for manual review:
@@ -150,13 +168,34 @@ Create contact sheets for manual review:
 .\.venv\Scripts\python.exe scripts\10_make_review_contact_sheets.py
 ```
 
-Open `outputs/reports/scraped_review_sheets/`, delete bad images from `data/scraped_candidates/<class_name>/`, then promote the remaining reviewed images into the train split:
+Open `outputs/reports/scraped_review_sheets/`, delete bad images from `data/scraped_candidates/<class_name>/`, then preprocess the remaining images:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\11_promote_reviewed_images.py --split train
+.\.venv\Scripts\python.exe scripts\13_preprocess_candidates.py --dry-run
+.\.venv\Scripts\python.exe scripts\13_preprocess_candidates.py
+```
+
+This normalizes images into `data/processed_candidates/`, copies suspicious files into `data/rejected_candidates/<reason>/`, and writes `outputs/reports/data_quality_report.csv`.
+
+Promote reviewed, preprocessed images into train/val/test:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\11_promote_reviewed_images.py --dry-run
+.\.venv\Scripts\python.exe scripts\11_promote_reviewed_images.py
 ```
 
 Important: do not promote images before visual review. Web search often returns logos, icons, unrelated dishes, or duplicate photos.
+
+## Clean Workspace Artifacts
+
+Archive smoke-test outputs and old demo artifacts without touching source data:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\12_clean_workspace.py --dry-run
+.\.venv\Scripts\python.exe scripts\12_clean_workspace.py --apply --mode archive
+```
+
+Use `--mode delete` only when you are sure the listed files are not needed.
 
 ## Download Public Dataset Notes
 
@@ -210,6 +249,12 @@ After real training:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\06_demo_checkout.py --image data\demo_trays\YOUR_IMAGE.jpg
+```
+
+For `thit_kho_trung`, the base price includes one egg. Extra eggs add 6,000 VND each:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\06_demo_checkout.py --image data\demo_trays\YOUR_IMAGE.jpg --egg-count 2
 ```
 
 Notebook equivalent:

@@ -17,6 +17,7 @@ from canteen_checkout.config import BILLS_DIR, CROPPED_DISHES_DIR, DEFAULT_MODEL
 from canteen_checkout.cropping import crop_regions, five_compartment_template, load_regions
 from canteen_checkout.io_utils import load_prices
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
+from canteen_checkout.pricing import THIT_KHO_TRUNG_CLASS, dish_price
 
 
 @torch.no_grad()
@@ -35,6 +36,7 @@ def main() -> None:
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--regions-json", type=Path, default=None)
     parser.add_argument("--threshold", type=float, default=0.45)
+    parser.add_argument("--egg-count", type=int, default=1, help="Egg count to charge for thit_kho_trung predictions.")
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args()
 
@@ -77,7 +79,13 @@ def main() -> None:
             uncertain = True
 
         price_row = prices.get(class_name)
-        price_vnd = 0 if price_row is None or uncertain else price_row.price_vnd
+        price_info = dish_price(
+            class_name,
+            prices,
+            uncertain=uncertain,
+            egg_count=args.egg_count if class_name == THIT_KHO_TRUNG_CLASS else None,
+        )
+        price_vnd = price_info.total_price_vnd
         display_name = class_name if price_row is None else price_row.display_name
         total += price_vnd
         items.append(
@@ -87,6 +95,9 @@ def main() -> None:
                 "display_name": display_name,
                 "confidence": round(confidence, 4),
                 "uncertain": uncertain,
+                "base_price_vnd": price_info.base_price_vnd,
+                "extra_price_vnd": price_info.extra_price_vnd,
+                "egg_count": price_info.egg_count,
                 "price_vnd": price_vnd,
             }
         )
@@ -106,9 +117,10 @@ def main() -> None:
     print("Detected dishes:")
     for idx, item in enumerate(items, 1):
         marker = " (uncertain)" if item["uncertain"] else ""
+        egg_note = f", eggs={item['egg_count']}" if item["egg_count"] is not None else ""
         print(
             f"{idx}. {item['display_name']} - {item['price_vnd']:,} VND "
-            f"- conf={item['confidence']:.2f}{marker}"
+            f"- conf={item['confidence']:.2f}{egg_note}{marker}"
         )
     print(f"Total: {total:,} VND")
     print(f"Bill JSON: {bill_path}")
