@@ -10,6 +10,8 @@ RAW_TEACHER_TRAYS_DIR = DATA_DIR / "raw_teacher_trays"
 DEMO_TRAYS_DIR = DATA_DIR / "demo_trays"
 CLASSIFICATION_DIR = DATA_DIR / "classification"
 DOWNLOADS_DIR = DATA_DIR / "downloads"
+SCRAPED_CANDIDATES_DIR = DATA_DIR / "scraped_candidates"
+TEMP_TEACHER_CROPS_DIR = DATA_DIR / "temp_teacher_crops"
 
 MODELS_DIR = PROJECT_ROOT / "models"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
