@@ -37,6 +37,7 @@ ACTION_FIELDS = [
 ]
 
 MODEL_CACHE: dict[str, object] = {}
+METRIC_CACHE: dict[str, tuple[float, int, object]] = {}
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,17 @@ def stable_item_id(path: Path) -> str:
         return str(path.resolve())
 
 
+def cached_assess_metrics(path: Path):
+    stat = path.stat()
+    key = stable_item_id(path)
+    cached = METRIC_CACHE.get(key)
+    if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        return cached[2]
+    _, metrics, _ = assess_image(path)
+    METRIC_CACHE[key] = (stat.st_mtime, stat.st_size, metrics)
+    return metrics
+
+
 def safe_label(value: str) -> str:
     value = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in value.strip().lower())
     value = "_".join(value.split())
@@ -114,43 +126,74 @@ def roots() -> list[dict[str, str]]:
     external_roots = sorted((DOWNLOADS_DIR / "external_staging").glob("external_*"), key=lambda p: p.stat().st_mtime, reverse=True)
     latest_external = external_roots[0] if external_roots else DOWNLOADS_DIR / "external_staging"
     candidates = [
-        ("classification", CLASSIFICATION_DIR),
-        ("external_review", latest_external / "review"),
-        ("external_reviewed", latest_external / "reviewed"),
-        ("quarantine", PROJECT_ROOT / "data" / "quarantine"),
+        ("classification", CLASSIFICATION_DIR, "classification"),
+        ("external_review", latest_external / "review", "folder"),
+        ("external_reviewed", latest_external / "reviewed", "folder"),
+        ("quarantine", PROJECT_ROOT / "data" / "quarantine", "folder"),
     ]
-    return [{"name": name, "path": relative_or_absolute(path)} for name, path in candidates if path.exists()]
+    return [{"name": name, "path": relative_or_absolute(path), "mode": mode} for name, path, mode in candidates if path.exists()]
+
+
+def root_mode(root: Path) -> str:
+    try:
+        if root.resolve() == CLASSIFICATION_DIR.resolve():
+            return "classification"
+    except FileNotFoundError:
+        pass
+    return "folder"
+
+
+def image_folders(root: Path) -> list[str]:
+    folders: set[str] = set()
+    if not root.exists():
+        return []
+    for path in root.rglob("*"):
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+            rel_parent = path.parent.resolve().relative_to(root.resolve())
+            folders.add(rel_parent.as_posix() or ".")
+    return sorted(folders, key=lambda value: (value.count("/"), value))
 
 
 def infer_split_class(root: Path, path: Path) -> tuple[str, str] | None:
     rel = path.resolve().relative_to(root.resolve())
     parts = rel.parts
-    if len(parts) >= 3 and parts[0] in {"train", "val", "test"} and parts[1] in DISH_CLASSES:
-        return parts[0], parts[1]
+    if root_mode(root) == "classification":
+        if len(parts) >= 3 and parts[0] in {"train", "val", "test"} and parts[1] in DISH_CLASSES:
+            return parts[0], parts[1]
+        return None
     if len(parts) >= 2:
-        return "", parts[0]
+        folder = Path(*parts[:-1]).as_posix()
+        return folder, parts[-2]
     return None
 
 
-def list_labeled_paths(root: Path, split: str = "", class_name: str = "") -> list[tuple[Path, str, str]]:
+def list_labeled_paths(root: Path, split: str = "", class_name: str = "", folder: str = "") -> list[tuple[Path, str, str]]:
     paths: list[tuple[Path, str, str]] = []
     if not root.exists():
         return paths
-    for path in sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS):
+    mode = root_mode(root)
+    if mode == "folder" and folder:
+        search_root = (root / folder).resolve()
+        if not is_inside(search_root, root) or not search_root.exists():
+            return paths
+        candidates = search_root.rglob("*")
+    else:
+        candidates = root.rglob("*")
+    for path in sorted(p for p in candidates if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS):
         inferred = infer_split_class(root, path)
         if inferred is None:
             continue
         item_split, item_class = inferred
-        if split and item_split != split:
+        if mode == "classification" and split and item_split != split:
             continue
-        if class_name and item_class != class_name:
+        if mode == "classification" and class_name and item_class != class_name:
             continue
         paths.append((path, item_split, item_class))
     return paths
 
 
 def make_item(path: Path, item_split: str, item_class: str) -> DataItem:
-    _, metrics, _ = assess_image(path)
+    metrics = cached_assess_metrics(path)
     if metrics is None:
         sha256 = ""
         phash = ""
@@ -176,15 +219,15 @@ def make_item(path: Path, item_split: str, item_class: str) -> DataItem:
     )
 
 
-def list_items(root: Path, split: str = "", class_name: str = "") -> list[DataItem]:
+def list_items(root: Path, split: str = "", class_name: str = "", folder: str = "") -> list[DataItem]:
     items: list[DataItem] = []
-    for path, item_split, item_class in list_labeled_paths(root, split, class_name):
+    for path, item_split, item_class in list_labeled_paths(root, split, class_name, folder):
         items.append(make_item(path, item_split, item_class))
     return items
 
 
 def count_tree(root: Path) -> dict[str, object]:
-    result: dict[str, object] = {"total": 0, "splits": {}, "classes": {}, "sources": {}}
+    result: dict[str, object] = {"total": 0, "splits": {}, "classes": {}, "folders": {}, "sources": {}}
     for path, item_split, item_class in list_labeled_paths(root):
         result["total"] = int(result["total"]) + 1
         split_key = item_split or "root"
@@ -192,6 +235,9 @@ def count_tree(root: Path) -> dict[str, object]:
         result["splits"][split_key] += 1
         result["classes"].setdefault(item_class, 0)
         result["classes"][item_class] += 1
+        folder = path.parent.resolve().relative_to(root.resolve()).as_posix() or "."
+        result["folders"].setdefault(folder, 0)
+        result["folders"][folder] += 1
         source = source_from_name(path)
         result["sources"].setdefault(source, 0)
         result["sources"][source] += 1
@@ -277,15 +323,26 @@ class DataIDE:
             "log": relative_or_absolute(action_log()),
         }
 
-    def browse(self, root_value: str, split: str = "", class_name: str = "", page: int = 0, page_size: int = 80) -> dict[str, object]:
+    def folders(self, root_value: str) -> dict[str, object]:
         root = resolve_project_path(root_value)
-        paths = list_labeled_paths(root, split, class_name)
+        return {
+            "ok": True,
+            "root": relative_or_absolute(root),
+            "mode": root_mode(root),
+            "folders": image_folders(root),
+        }
+
+    def browse(self, root_value: str, split: str = "", class_name: str = "", folder: str = "", page: int = 0, page_size: int = 80) -> dict[str, object]:
+        root = resolve_project_path(root_value)
+        paths = list_labeled_paths(root, split, class_name, folder)
         start = max(0, page * page_size)
         end = min(len(paths), start + page_size)
         items = [make_item(path, item_split, item_class) for path, item_split, item_class in paths[start:end]]
         self.last_items.update({item.item_id: item for item in items})
         return {
             "root": relative_or_absolute(root),
+            "mode": root_mode(root),
+            "folder": folder,
             "counts": count_tree(root),
             "page": page,
             "page_size": page_size,
@@ -342,8 +399,12 @@ class DataIDE:
         item = self.item_from_id(item_id)
         if item.class_name == class_name:
             return {"ok": True, "output_path": item.rel_path, "noop": True}
-        if item.split:
+        if item.split in {"train", "val", "test"}:
             target_dir = item.path.parents[1] / class_name
+        elif "external_staging" in item.path.parts and "review" in item.path.parts:
+            review_index = item.path.parts.index("review")
+            review_dir = Path(*item.path.parts[: review_index + 1])
+            target_dir = review_dir.parent / "reviewed" / class_name
         else:
             target_dir = item.path.parent.parent / class_name
         target = unique_destination(target_dir, item.filename)
@@ -454,7 +515,7 @@ HTML = r"""<!doctype html>
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}.card{position:relative;border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden}
     .card.selected{outline:3px solid var(--accent)}.card.active-row{box-shadow:0 0 0 2px #9fd8cc;border-color:#63b8a8}.card img{width:100%;aspect-ratio:1/1;object-fit:cover;background:#eef1f4}.card .body{padding:8px}.small{font-size:12px;color:var(--muted);word-break:break-word}
     .keycap{position:absolute;top:6px;left:6px;min-width:24px;height:24px;border-radius:999px;background:#1b222a;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;box-shadow:0 2px 8px #0003}.keycap.muted{background:#ffffffde;color:#687382;border:1px solid var(--line)}
-    .queuebar{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center}.queuebar button{width:auto}.shortcut{margin-top:8px;padding:8px;border:1px dashed var(--line);border-radius:6px;background:#fafbfc;color:var(--muted)}
+    .queuebar{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center}.queuebar button{width:auto}.shortcut{margin-top:8px;padding:8px;border:1px dashed var(--line);border-radius:6px;background:#fafbfc;color:var(--muted)}.hidden{display:none!important}
     .pill{display:inline-block;padding:2px 6px;border-radius:999px;background:#eef1f4;font-size:12px;margin:2px}.bad{background:#fee4e2;color:#912018}.warn{background:#fff2cc;color:#7a4a00}.ok{background:#dcfae6;color:#05603a}
     table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left}
   </style>
@@ -465,8 +526,9 @@ HTML = r"""<!doctype html>
   <aside>
     <div class="group"><h2>Nguồn dữ liệu</h2>
       <label>Root</label><select id="rootSelect"></select>
-      <label>Split</label><select id="splitSelect"><option value="">all/root</option><option>train</option><option>val</option><option>test</option></select>
-      <label>Class</label><select id="classFilter"></select>
+      <label id="splitLabel">Split</label><select id="splitSelect"><option value="">all/root</option><option>train</option><option>val</option><option>test</option></select>
+      <label id="classFilterLabel">Class</label><select id="classFilter"></select>
+      <label id="folderFilterLabel" class="hidden">Folder / pool</label><select id="folderFilter" class="hidden"></select>
       <div class="row"><button id="loadBtn" class="primary">Load</button><button id="undoBtn">Undo</button></div>
     </div>
     <div class="group"><h2>Action</h2>
@@ -493,12 +555,16 @@ HTML = r"""<!doctype html>
 </div>
 <script>
 const $=id=>document.getElementById(id);
-const state={items:[],selected:new Set(),preds:{},classes:[],cursorRow:0,lastTotal:0};
+const state={items:[],selected:new Set(),preds:{},classes:[],roots:[],cursorRow:0,lastTotal:0,rootMode:'classification',loadSeq:0,activeRoot:'',filterKey:'',initialized:false,watchBusy:false};
 function status(t){$('status').textContent=t}
 function esc(v){return String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 async function api(url,body=null){const opt=body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{};const r=await fetch(url,opt);const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||r.statusText);return d}
 function clsOptions(){return [''].concat(state.classes||[]).map(c=>`<option value="${esc(c)}">${esc(c||'all')}</option>`).join('')}
 function isTypingTarget(target){return ['INPUT','SELECT','TEXTAREA'].includes(target?.tagName)||target?.isContentEditable}
+function rootInfo(){return state.roots.find(r=>r.path===$('rootSelect').value)||state.roots[0]||{mode:'classification'}}
+function currentFilterKey(){return [$('rootSelect').value,state.rootMode,$('splitSelect').value,$('classFilter').value,$('folderFilter').value].join('|')}
+function setHidden(id,hidden){$(id).classList.toggle('hidden',hidden)}
+async function syncRootFilters(){const info=rootInfo();state.rootMode=info.mode||'folder';const isClass=state.rootMode==='classification';setHidden('splitLabel',!isClass);setHidden('splitSelect',!isClass);setHidden('classFilterLabel',!isClass);setHidden('classFilter',!isClass);setHidden('folderFilterLabel',isClass);setHidden('folderFilter',isClass);if(isClass){$('folderFilter').innerHTML='<option value="">all folders</option>';return}const d=await api('/api/folders?'+new URLSearchParams({root:$('rootSelect').value}));const opts=[''].concat(d.folders||[]);$('folderFilter').innerHTML=opts.map(f=>`<option value="${esc(f)}">${esc(f||'all folders')}</option>`).join('')}
 function columnsPerRow(){const grid=$('grid');const width=grid?.clientWidth||window.innerWidth;return Math.max(1,Math.min(10,Math.floor((width+10)/170)))}
 function totalRows(){return state.items.length?Math.ceil(state.items.length/columnsPerRow()):0}
 function clampRow(){const rows=totalRows();state.cursorRow=rows?Math.max(0,Math.min(state.cursorRow,rows-1)):0}
@@ -508,13 +574,19 @@ function scrollToRow(behavior='smooth'){const [start]=rowBounds();const card=doc
 function setRow(row,behavior='smooth'){state.cursorRow=row;clampRow();renderGrid();scrollToRow(behavior)}
 function toggleAt(index){const it=state.items[index];if(!it)return;state.selected.has(it.id)?state.selected.delete(it.id):state.selected.add(it.id);renderGrid()}
 function selectCurrentRow(){const [start,end]=rowBounds();for(let i=start;i<end;i++)state.selected.add(state.items[i].id);renderGrid()}
-async function init(){const s=await api('/api/state');state.classes=s.classes;$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetClass').innerHTML=(state.classes||[]).map(c=>`<option>${esc(c)}</option>`).join('');await load({keepRow:false})}
-async function load(opts={}){const nextRow=opts.keepRow?state.cursorRow:0;state.selected.clear();state.preds={};const q=new URLSearchParams({root:$('rootSelect').value,split:$('splitSelect').value,class_name:$('classFilter').value,page_size:'120'});const d=await api('/api/browse?'+q);state.items=d.items;state.lastTotal=d.total;state.cursorRow=nextRow;clampRow();renderCounts(d.counts);renderGrid();status(`${d.total} files · queue refreshed`);scrollToRow('auto')}
-function renderCounts(c){$('counts').innerHTML=`<div class=stats><div class=stat>Total<br><b>${c.total}</b></div><div class=stat>Classes<br><b>${Object.keys(c.classes).length}</b></div><div class=stat>Sources<br><b>${esc(Object.keys(c.sources).join(', '))}</b></div></div><pre>${esc(JSON.stringify(c.classes,null,2))}</pre>`}
+async function init(){const s=await api('/api/state');state.classes=s.classes;state.roots=s.roots;$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.mode)}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetClass').innerHTML=(state.classes||[]).map(c=>`<option>${esc(c)}</option>`).join('');state.initialized=true;await rootChanged()}
+async function load(opts={}){const seq=++state.loadSeq;const nextRow=opts.keepRow?state.cursorRow:0;state.selected.clear();state.preds={};const rootValue=$('rootSelect').value;status('Loading files...');const q=new URLSearchParams({root:rootValue,page_size:'120'});if(state.rootMode==='classification'){q.set('split',$('splitSelect').value);q.set('class_name',$('classFilter').value)}else{q.set('folder',$('folderFilter').value)}const d=await api('/api/browse?'+q);if(seq!==state.loadSeq)return;state.rootMode=d.mode||state.rootMode;state.activeRoot=rootValue;state.filterKey=currentFilterKey();state.items=d.items;state.lastTotal=d.total;state.cursorRow=nextRow;clampRow();renderCounts(d.counts);renderGrid();status(`${d.total} files · queue refreshed`);scrollToRow('auto')}
+function renderCounts(c){const detail=state.rootMode==='classification'?c.classes:c.folders;const detailTitle=state.rootMode==='classification'?'Classes':'Folders';$('counts').innerHTML=`<div class=stats><div class=stat>Total<br><b>${c.total}</b></div><div class=stat>${detailTitle}<br><b>${Object.keys(detail||{}).length}</b></div><div class=stat>Sources<br><b>${esc(Object.keys(c.sources).join(', ')||'-')}</b></div></div><pre>${esc(JSON.stringify(detail||{},null,2))}</pre>`}
 function renderGrid(){const cols=columnsPerRow();$('grid').innerHTML=state.items.map((it,idx)=>{const p=state.preds[it.id];const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';const row=Math.floor(idx/cols);const keyIndex=idx%cols;const key=keyIndex===9?'0':String(keyIndex+1);const active=row===state.cursorRow;return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)} · blur ${esc(it.blur_score)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div><div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`}).join('');document.querySelectorAll('.card').forEach(card=>{card.onclick=e=>{if(e.target.dataset.fb){feedback(card.dataset.id,e.target.dataset.fb);return}state.cursorRow=Math.floor(Number(card.dataset.index)/columnsPerRow());state.selected.has(card.dataset.id)?state.selected.delete(card.dataset.id):state.selected.add(card.dataset.id);renderGrid()}});updateQueueStatus()}
 async function act(action,extra={}){const ids=[...state.selected];if(!ids.length){alert('Chưa chọn ảnh');return}status(`Đang xử lý ${ids.length} ảnh...`);let ok=0;for(const id of ids){await api('/api/action',{action,item_id:id,...extra});ok++}await load({keepRow:true});status(`Đã xử lý ${ok} ảnh; đã nạp ảnh tiếp theo`)}
 async function predict(){const ids=state.items.map(x=>x.id);if(!ids.length)return;status(`Predict ${ids.length} ảnh visible...`);const d=await api('/api/predict',{item_ids:ids,threshold:Number($('threshold').value)});state.preds={};for(const p of d.predictions)state.preds[p.id]=p;const counts={};for(const p of d.predictions)counts[p.decision]=(counts[p.decision]||0)+1;$('modelStats').textContent=JSON.stringify(counts);renderGrid();status('Predict xong')}
 async function feedback(id,val){const it=state.items.find(x=>x.id===id),p=state.preds[id]||{};await api('/api/feedback',{timestamp:new Date().toISOString(),item_id:id,current_class:it.class_name,model_top1:p.top1||'',is_correct:val,correct_class:val==='yes'?p.top1:'',note:''});status('Saved feedback')}
+const rootChanged=async()=>{await syncRootFilters();await load({keepRow:false})};
+const filterChanged=()=>load({keepRow:false});
+$('rootSelect').onchange=rootChanged;$('rootSelect').oninput=rootChanged;
+$('folderFilter').onchange=filterChanged;$('folderFilter').oninput=filterChanged;
+$('splitSelect').onchange=filterChanged;$('splitSelect').oninput=filterChanged;
+$('classFilter').onchange=filterChanged;$('classFilter').oninput=filterChanged;
 $('loadBtn').onclick=()=>load({keepRow:false});
 $('undoBtn').onclick=async()=>{await api('/api/undo',{});await load({keepRow:true})};
 $('moveBtn').onclick=()=>act('move_class',{class_name:$('targetClass').value});
@@ -529,6 +601,7 @@ $('prevRowBtn').onclick=()=>setRow(state.cursorRow-1);
 $('nextRowBtn').onclick=()=>setRow(state.cursorRow+1);
 document.addEventListener('keydown',e=>{if(isTypingTarget(e.target)||e.ctrlKey||e.metaKey||e.altKey)return;const key=e.key.toLowerCase();if(/^[1-9]$/.test(e.key)){e.preventDefault();const [start]=rowBounds();toggleAt(start+Number(e.key)-1);return}if(e.key==='0'){e.preventDefault();const [start]=rowBounds();toggleAt(start+9);return}if(e.code==='Space'){e.preventDefault();setRow(state.cursorRow+(e.shiftKey?-1:1));return}if(e.key==='ArrowDown'){e.preventDefault();setRow(state.cursorRow+1);return}if(e.key==='ArrowUp'){e.preventDefault();setRow(state.cursorRow-1);return}if(e.key==='Enter'){e.preventDefault();$('moveBtn').click();return}if(key==='q'){e.preventDefault();$('quarantineBtn').click();return}if(key==='f'){e.preventDefault();$('futureUseBtn').click();return}if(key==='p'){e.preventDefault();predict();return}if(key==='a'){e.preventDefault();selectCurrentRow();return}if(e.key==='Escape'){state.selected.clear();renderGrid();return}});
 let resizeTimer=null;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{clampRow();renderGrid();scrollToRow('auto')},120)});
+setInterval(async()=>{if(!state.initialized||state.watchBusy)return;const key=currentFilterKey();if(key===state.filterKey)return;state.watchBusy=true;try{if($('rootSelect').value!==state.activeRoot)await syncRootFilters();await load({keepRow:false})}finally{state.watchBusy=false}},500);
 init().catch(e=>{status(e.message);alert(e.message)});
 </script>
 </body></html>"""
@@ -565,6 +638,10 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/state":
                 self.send_json(STORE.state())
                 return
+            if parsed.path == "/api/folders":
+                q = parse_qs(parsed.query)
+                self.send_json(STORE.folders(q.get("root", [""])[0]))
+                return
             if parsed.path == "/api/browse":
                 q = parse_qs(parsed.query)
                 self.send_json(
@@ -572,6 +649,7 @@ class Handler(BaseHTTPRequestHandler):
                         q.get("root", [""])[0],
                         q.get("split", [""])[0],
                         q.get("class_name", [""])[0],
+                        q.get("folder", [""])[0],
                         int(q.get("page", ["0"])[0]),
                         int(q.get("page_size", ["80"])[0]),
                     )
