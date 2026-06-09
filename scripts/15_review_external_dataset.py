@@ -431,6 +431,20 @@ class ReviewStore:
         )
         return {"ok": True, "output_path": output}
 
+    def bulk_action(self, item_ids: list[str], action: str, class_name: str = "") -> dict[str, object]:
+        state = self.state()
+        results = []
+        for item_id in item_ids:
+            if item_id in state:
+                results.append({"id": item_id, "ok": True, "skipped": True, "reason": "already_done"})
+                continue
+            try:
+                result = self.action(item_id, action, class_name)
+                results.append({"id": item_id, **result})
+            except Exception as exc:
+                results.append({"id": item_id, "ok": False, "error": str(exc)})
+        return {"ok": True, "count": len(results), "results": results}
+
     def undo(self, item_id: str) -> dict[str, object]:
         state = self.state()
         if not item_id:
@@ -601,6 +615,21 @@ INDEX_HTML = r"""<!doctype html>
       cursor: pointer;
     }
     .thumb.active { border-color: var(--accent); }
+    .thumb-item {
+      position: relative;
+      flex: 0 0 auto;
+    }
+    .thumb-item.selected .thumb {
+      border-color: var(--ok);
+      box-shadow: 0 0 0 2px rgba(46, 160, 67, 0.18);
+    }
+    .thumb-select {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      width: 18px;
+      height: 18px;
+    }
     .class-btn, .cmd {
       width: 100%;
       border: 1px solid var(--line);
@@ -703,6 +732,17 @@ INDEX_HTML = r"""<!doctype html>
     <aside class="right">
       <h2>Classes</h2>
       <div id="classes"></div>
+      <h2>Bulk</h2>
+      <div class="cmd-row">
+        <button id="selectVisible" class="cmd">Select Visible</button>
+        <button id="clearSelection" class="cmd">Clear</button>
+      </div>
+      <div class="cmd-row">
+        <button id="bulkReject" class="cmd reject">Reject Selected</button>
+        <button id="bulkSkip" class="cmd skip">Skip Selected</button>
+      </div>
+      <button id="skipVisible" class="cmd skip">Skip Visible</button>
+      <div class="meta" id="selectedCount">Selected: 0</div>
       <h2>Extra Folders</h2>
       <div id="extraLabels"></div>
       <div class="extra-row">
@@ -748,6 +788,7 @@ INDEX_HTML = r"""<!doctype html>
     let state = null;
     let currentId = null;
     let lastActionId = null;
+    let selectedIds = new Set();
 
     async function request(path, options) {
       const res = await fetch(path, options);
@@ -774,6 +815,7 @@ INDEX_HTML = r"""<!doctype html>
       renderClasses();
       renderExtraLabels();
       renderThumbs();
+      updateSelectedCount();
     }
 
     function renderPools() {
@@ -875,6 +917,16 @@ INDEX_HTML = r"""<!doctype html>
       const box = document.getElementById("thumbs");
       box.innerHTML = "";
       state.nearby.forEach((item, offset) => {
+        const wrap = document.createElement("div");
+        wrap.className = "thumb-item" + (selectedIds.has(item.id) ? " selected" : "");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "thumb-select";
+        checkbox.checked = selectedIds.has(item.id);
+        checkbox.onclick = event => {
+          event.stopPropagation();
+          toggleSelected(item.id);
+        };
         const img = document.createElement("img");
         img.className = "thumb" + (item.id === currentId ? " active" : "");
         img.src = item.image_url;
@@ -884,11 +936,45 @@ INDEX_HTML = r"""<!doctype html>
           if (index < 0) index = 0;
           load();
         };
-        box.appendChild(img);
+        wrap.appendChild(img);
+        wrap.appendChild(checkbox);
+        box.appendChild(wrap);
       });
     }
 
+    function toggleSelected(id) {
+      if (selectedIds.has(id)) selectedIds.delete(id);
+      else selectedIds.add(id);
+      updateSelectedCount();
+      renderThumbs();
+    }
+
+    function updateSelectedCount() {
+      document.getElementById("selectedCount").textContent = `Selected: ${selectedIds.size}`;
+    }
+
+    async function bulkActForIds(ids, action, className = "") {
+      const uniqueIds = Array.from(new Set(ids)).filter(Boolean);
+      if (!uniqueIds.length) return;
+      lastActionId = uniqueIds[uniqueIds.length - 1];
+      await request("/api/bulk-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: uniqueIds, action, class_name: className })
+      });
+      uniqueIds.forEach(id => selectedIds.delete(id));
+      await load();
+    }
+
+    async function bulkAct(action, className = "") {
+      await bulkActForIds(Array.from(selectedIds), action, className);
+    }
+
     async function act(action, className = "") {
+      if (selectedIds.size > 0) {
+        await bulkAct(action, className);
+        return;
+      }
       if (!currentId) return;
       lastActionId = currentId;
       await request("/api/action", {
@@ -933,6 +1019,19 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("reject").onclick = () => act("reject");
     document.getElementById("skip").onclick = () => act("skip");
     document.getElementById("undo").onclick = undo;
+    document.getElementById("selectVisible").onclick = () => {
+      state.nearby.forEach(item => selectedIds.add(item.id));
+      renderThumbs();
+      updateSelectedCount();
+    };
+    document.getElementById("clearSelection").onclick = () => {
+      selectedIds.clear();
+      renderThumbs();
+      updateSelectedCount();
+    };
+    document.getElementById("bulkReject").onclick = () => bulkAct("reject");
+    document.getElementById("bulkSkip").onclick = () => bulkAct("skip");
+    document.getElementById("skipVisible").onclick = () => bulkActForIds(state.nearby.map(item => item.id), "skip");
     document.getElementById("addExtra").onclick = addExtraLabel;
     document.getElementById("extraInput").addEventListener("keydown", event => {
       if (event.key === "Enter") {
@@ -1052,6 +1151,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/action":
                 result = self.store.action(
                     item_id=data.get("id", ""),
+                    action=data.get("action", ""),
+                    class_name=data.get("class_name", ""),
+                )
+                json_response(self, result)
+                return
+            if parsed.path == "/api/bulk-action":
+                result = self.store.bulk_action(
+                    item_ids=data.get("ids", []),
                     action=data.get("action", ""),
                     class_name=data.get("class_name", ""),
                 )
