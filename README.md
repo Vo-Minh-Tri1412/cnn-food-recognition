@@ -194,6 +194,26 @@ Promote reviewed, preprocessed images into train/val/test:
 
 Important: do not promote images before visual review. Web search often returns logos, icons, unrelated dishes, or duplicate photos.
 
+## Import External Datasets
+
+When using downloaded dish folders and Roboflow tray datasets, import them into isolated review pools instead of training from them directly:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\14_import_external_datasets.py
+```
+
+This creates `data/downloads/external_staging/external_<timestamp>/` with:
+
+```text
+review/<pool>/              # normalized candidates and Roboflow crops
+reviewed/<class_name>/      # empty class folders for manually accepted images
+reports/review_sheets/      # paged contact sheets
+reports/external_import_manifest.csv
+reports/review_instructions.txt
+```
+
+Ambiguous pools such as `thit_kho_or_thit_kho_trung`, `canh_chua_unknown`, `protein_grid_review`, and `unknown_food_crops` must be manually copied into the right `reviewed/<class_name>/` folder before promotion.
+
 ## Clean Workspace Artifacts
 
 Archive smoke-test outputs and old demo artifacts without touching source data:
