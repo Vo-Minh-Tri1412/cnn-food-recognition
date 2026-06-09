@@ -80,14 +80,12 @@ def is_near_duplicate(phash: str, seen: list[str], threshold: int) -> bool:
     return any(hamming_distance_hex(phash, old) <= threshold for old in seen)
 
 
-def collect_items(specs: list[SourceSpec], duplicate_hamming: int) -> tuple[dict[str, list[ImageItem]], list[dict[str, str]]]:
-    by_class: dict[str, list[ImageItem]] = defaultdict(list)
+def collect_candidate_items(specs: list[SourceSpec]) -> tuple[list[ImageItem], list[dict[str, str]]]:
+    items: list[ImageItem] = []
     rows: list[dict[str, str]] = []
 
     for class_name in DISH_CLASSES:
-        seen: list[str] = []
-        # Higher priority sources are read first. Existing/old candidates win dedupe ties.
-        for spec in sorted(specs, key=lambda item: item.priority, reverse=True):
+        for spec in specs:
             class_dir = spec.root / class_name
             for path in list_images(class_dir):
                 image, metrics, reasons = assess_image(path)
@@ -106,23 +104,7 @@ def collect_items(specs: list[SourceSpec], duplicate_hamming: int) -> tuple[dict
                         }
                     )
                     continue
-                if is_near_duplicate(metrics.phash, seen, duplicate_hamming):
-                    rows.append(
-                        {
-                            "status": "skipped",
-                            "reason": "near_duplicate_lower_priority_or_same_source",
-                            "source": spec.name,
-                            "class_name": class_name,
-                            "source_path": relative_or_absolute(path),
-                            "target_split": "",
-                            "target_path": "",
-                            "repeat_index": "",
-                            "phash": metrics.phash,
-                        }
-                    )
-                    continue
-                seen.append(metrics.phash)
-                by_class[class_name].append(
+                items.append(
                     ImageItem(
                         source_name=spec.name,
                         class_name=class_name,
@@ -133,6 +115,85 @@ def collect_items(specs: list[SourceSpec], duplicate_hamming: int) -> tuple[dict
                         priority=spec.priority,
                     )
                 )
+    return items, rows
+
+
+def collect_items(specs: list[SourceSpec], duplicate_hamming: int, cross_class_hamming: int) -> tuple[dict[str, list[ImageItem]], list[dict[str, str]]]:
+    candidate_items, rows = collect_candidate_items(specs)
+    excluded_ids: set[int] = set()
+
+    by_sha: dict[str, list[ImageItem]] = defaultdict(list)
+    for item in candidate_items:
+        by_sha[item.sha256].append(item)
+    for sha_items in by_sha.values():
+        if len({item.class_name for item in sha_items}) <= 1:
+            continue
+        for item in sha_items:
+            excluded_ids.add(id(item))
+            rows.append(
+                {
+                    "status": "skipped",
+                    "reason": "exact_cross_class_conflict",
+                    "source": item.source_name,
+                    "class_name": item.class_name,
+                    "source_path": relative_or_absolute(item.path),
+                    "target_split": "",
+                    "target_path": "",
+                    "repeat_index": "",
+                    "phash": item.phash,
+                }
+            )
+
+    sorted_items = sorted(candidate_items, key=lambda item: (item.sha256, item.path.as_posix()))
+    for idx, item in enumerate(sorted_items):
+        if id(item) in excluded_ids:
+            continue
+        for other in sorted_items[idx + 1 :]:
+            if id(other) in excluded_ids:
+                continue
+            if item.class_name == other.class_name:
+                continue
+            distance = hamming_distance_hex(item.phash, other.phash)
+            if distance <= cross_class_hamming:
+                for conflict_item in [item, other]:
+                    excluded_ids.add(id(conflict_item))
+                    rows.append(
+                        {
+                            "status": "skipped",
+                            "reason": f"near_cross_class_conflict_hamming_{distance}",
+                            "source": conflict_item.source_name,
+                            "class_name": conflict_item.class_name,
+                            "source_path": relative_or_absolute(conflict_item.path),
+                            "target_split": "",
+                            "target_path": "",
+                            "repeat_index": "",
+                            "phash": conflict_item.phash,
+                        }
+                    )
+
+    by_class: dict[str, list[ImageItem]] = defaultdict(list)
+    seen_by_class: dict[str, list[str]] = defaultdict(list)
+    for item in sorted(candidate_items, key=lambda item: (item.class_name, item.sha256, item.path.as_posix())):
+        if id(item) in excluded_ids:
+            continue
+        seen = seen_by_class[item.class_name]
+        if is_near_duplicate(item.phash, seen, duplicate_hamming):
+            rows.append(
+                {
+                    "status": "skipped",
+                    "reason": "near_duplicate_same_class",
+                    "source": item.source_name,
+                    "class_name": item.class_name,
+                    "source_path": relative_or_absolute(item.path),
+                    "target_split": "",
+                    "target_path": "",
+                    "repeat_index": "",
+                    "phash": item.phash,
+                }
+            )
+            continue
+        seen.append(item.phash)
+        by_class[item.class_name].append(item)
     return by_class, rows
 
 
@@ -289,6 +350,7 @@ def main() -> None:
     parser.add_argument("--image-size", type=int, default=512)
     parser.add_argument("--mode", choices=["pad", "crop"], default="pad")
     parser.add_argument("--duplicate-hamming", type=int, default=8)
+    parser.add_argument("--cross-class-hamming", type=int, default=4, help="Skip near-duplicate images that appear under different classes.")
     parser.add_argument("--clear", action="store_true", help="Clear only files generated by this script before writing. User-added files are preserved.")
     parser.add_argument("--clear-all", action="store_true", help="Danger: remove all existing train/val/test files before writing.")
     parser.add_argument("--dry-run", action="store_true")
@@ -298,7 +360,7 @@ def main() -> None:
     old_source = args.old_source or latest_merge_processed()
     reviewed_source = args.reviewed_source or latest_external_reviewed()
     specs = [
-        SourceSpec("old", old_source, args.old_weight, priority=2),
+        SourceSpec("old", old_source, args.old_weight, priority=1),
         SourceSpec("reviewed", reviewed_source, args.reviewed_weight, priority=1),
     ]
 
@@ -308,7 +370,7 @@ def main() -> None:
     print("Output:", args.out)
     print("Dry run:", args.dry_run)
 
-    by_class, report_rows = collect_items(specs, args.duplicate_hamming)
+    by_class, report_rows = collect_items(specs, args.duplicate_hamming, args.cross_class_hamming)
     by_class, cap_rows = cap_reviewed_items(
         by_class,
         max_reviewed_per_old=args.max_reviewed_per_old,
@@ -329,6 +391,7 @@ def main() -> None:
             for spec in specs
         ],
         "duplicate_hamming": args.duplicate_hamming,
+        "cross_class_hamming": args.cross_class_hamming,
         "max_reviewed_per_old": args.max_reviewed_per_old,
         "min_reviewed_per_class": args.min_reviewed_per_class,
         "classes": {},

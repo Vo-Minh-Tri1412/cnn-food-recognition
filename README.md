@@ -422,6 +422,35 @@ Notebook equivalent:
 
 ```text
 notebooks/01_train_classifier.ipynb
+notebooks/00_workflow_tieng_viet.ipynb
+```
+
+## Review and Audit Data
+
+Audit label conflicts after merging data:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\20_audit_dataset_conflicts.py --root data\classification --phash-threshold 4
+```
+
+Open the local Data IDE for direct review of `data/classification`, external review pools, and quarantine folders:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\21_data_ide.py
+```
+
+Open `http://127.0.0.1:7862`. The app can move images between classes, quarantine/future-use images such as `canh_bi_dao`, undo the last move, and run the current classifier as a review assistant.
+
+Search public dataset links before crawling individual images:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\22_search_public_datasets.py --provider mixed
+```
+
+When crawling image candidates, use mixed providers and dedupe against existing data:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\09_collect_web_images.py --queries configs\green_vegetable_extra_queries.csv --provider mixed --dedupe-against data\classification --dedupe-against data\downloads
 ```
 
 Outputs:

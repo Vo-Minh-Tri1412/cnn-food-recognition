@@ -33,7 +33,7 @@ ACTION_FIELDS = [
 ]
 
 MODEL_DECISIONS = ["auto_accepted", "needs_review", "ambiguous_review", "model_rejected"]
-DEFAULT_EXTRA_LABELS = ["mon_khac", "future_use", "khay_background"]
+DEFAULT_EXTRA_LABELS = ["mon_khac", "future_use", "canh_bi_dao", "khay_background"]
 
 
 @dataclass(frozen=True)

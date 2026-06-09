@@ -155,6 +155,24 @@ def find_duckduckgo_image_urls(query: str, max_urls: int) -> list[str]:
     return urls
 
 
+def find_image_urls(provider: str, query: str, max_urls: int) -> list[tuple[str, str]]:
+    if provider == "duckduckgo":
+        return [(url, "duckduckgo") for url in find_duckduckgo_image_urls(query, max_urls)]
+    if provider == "bing":
+        return [(url, "bing") for url in find_bing_image_urls(query, max_urls)]
+    urls: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for provider_name, finder in [("duckduckgo", find_duckduckgo_image_urls), ("bing", find_bing_image_urls)]:
+        try:
+            for url in finder(query, max_urls):
+                if url not in seen:
+                    seen.add(url)
+                    urls.append((url, provider_name))
+        except Exception as exc:
+            print(f"  {provider_name} search failed: {exc}")
+    return urls
+
+
 def safe_suffix(content_type: str, url: str) -> str:
     content_type = content_type.lower()
     if "png" in content_type:
@@ -235,7 +253,7 @@ def main() -> None:
     parser.add_argument("--min-size", type=int, default=180)
     parser.add_argument("--sleep", type=float, default=1.0)
     parser.add_argument("--class-name", choices=DISH_CLASSES, default=None)
-    parser.add_argument("--provider", choices=["duckduckgo", "bing"], default="duckduckgo")
+    parser.add_argument("--provider", choices=["duckduckgo", "bing", "mixed"], default="duckduckgo")
     parser.add_argument("--manifest", type=Path, default=SCRAPED_MANIFEST_CSV)
     parser.add_argument("--strict-phrase", action="store_true", help="Quote each query phrase before adding negative terms.")
     parser.add_argument("--raw-query", action="store_true", help="Do not append negative terms to search queries.")
@@ -272,30 +290,24 @@ def main() -> None:
         if counts[class_name] >= args.max_downloads_per_class:
             continue
         print(f"Searching [{class_name}] {search_query}")
-        provider_used = args.provider
         try:
-            if args.provider == "duckduckgo":
-                urls = find_duckduckgo_image_urls(search_query, args.per_query)
-                if not urls:
-                    print("  duckduckgo returned no urls; trying bing fallback")
-                    urls = find_bing_image_urls(search_query, args.per_query)
-                    provider_used = "bing_fallback"
-            else:
-                urls = find_bing_image_urls(search_query, args.per_query)
+            urls = find_image_urls(args.provider, search_query, args.per_query)
+            if args.provider == "duckduckgo" and not urls:
+                print("  duckduckgo returned no urls; trying bing fallback")
+                urls = [(url, "bing_fallback") for url in find_bing_image_urls(search_query, args.per_query)]
         except Exception as exc:
             print(f"  search failed: {exc}")
             if args.provider == "duckduckgo":
                 print("  trying bing fallback")
                 try:
-                    urls = find_bing_image_urls(search_query, args.per_query)
-                    provider_used = "bing_fallback"
+                    urls = [(url, "bing_fallback") for url in find_bing_image_urls(search_query, args.per_query)]
                 except Exception as fallback_exc:
                     print(f"  fallback failed: {fallback_exc}")
                     urls = []
             else:
                 urls = []
         print(f"  found {len(urls)} urls")
-        for idx, url in enumerate(urls):
+        for idx, (url, provider_used) in enumerate(urls):
             if counts[class_name] >= args.max_downloads_per_class:
                 break
             if url in seen_urls[class_name]:
