@@ -410,6 +410,14 @@ Train after `data/classification/` has labeled crops:
 .\.venv\Scripts\python.exe scripts\05_train_classifier.py --epochs 5 --batch-size 8
 ```
 
+For visually similar classes such as `canh_rau`/`rau_xao` and `thit_kho`/`thit_kho_trung`, use the stronger EfficientNet-B0 backbone:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\05_train_classifier.py --arch efficientnet_b0 --epochs 12 --batch-size 8 --lr 0.0001
+```
+
+The training script saves the best validation checkpoint and reports test metrics from that best checkpoint.
+
 Notebook equivalent:
 
 ```text

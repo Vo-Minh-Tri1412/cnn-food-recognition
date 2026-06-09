@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 from canteen_checkout.config import CLASSIFICATION_DIR, DEFAULT_MODEL_PATH, DISH_CLASSES, REPORTS_DIR
 from canteen_checkout.io_utils import IMAGE_EXTENSIONS, save_class_names
-from canteen_checkout.model import build_classifier, eval_transforms, resolve_device, save_checkpoint, train_transforms
+from canteen_checkout.model import build_classifier, eval_transforms, load_checkpoint, resolve_device, save_checkpoint, train_transforms
 
 
 class FixedClassImageDataset(Dataset):
@@ -79,6 +79,15 @@ def run_epoch(model, loader, criterion, optimizer, device, train: bool) -> tuple
     return total_loss / max(total, 1), correct / max(total, 1)
 
 
+def class_weight_tensor(counts: dict[str, int], class_names: list[str], device: torch.device) -> torch.Tensor:
+    total = sum(counts.values())
+    weights = []
+    for class_name in class_names:
+        count = max(counts.get(class_name, 0), 1)
+        weights.append(total / (len(class_names) * count))
+    return torch.tensor(weights, dtype=torch.float32, device=device)
+
+
 @torch.no_grad()
 def collect_predictions(model, loader, device) -> tuple[list[int], list[int]]:
     model.eval()
@@ -120,6 +129,9 @@ def main() -> None:
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--arch", choices=["mobilenet_v3_small", "efficientnet_b0"], default="mobilenet_v3_small")
+    parser.add_argument("--no-weighted-loss", action="store_true", help="Disable class-balanced loss weights.")
+    parser.add_argument("--label-smoothing", type=float, default=0.0)
     parser.add_argument("--no-pretrained", action="store_true")
     parser.add_argument("--allow-empty-val", action="store_true")
     args = parser.parse_args()
@@ -144,8 +156,9 @@ def main() -> None:
     val_loader = DataLoader(val_ds if len(val_ds) else train_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     test_loader = DataLoader(test_ds if len(test_ds) else val_ds if len(val_ds) else train_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
-    model = build_classifier(len(DISH_CLASSES), pretrained=not args.no_pretrained).to(device)
-    criterion = nn.CrossEntropyLoss()
+    model = build_classifier(len(DISH_CLASSES), pretrained=not args.no_pretrained, arch=args.arch).to(device)
+    loss_weights = None if args.no_weighted_loss else class_weight_tensor(train_ds.counts_by_class(), DISH_CLASSES, device)
+    criterion = nn.CrossEntropyLoss(weight=loss_weights, label_smoothing=args.label_smoothing)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     history = []
@@ -170,7 +183,8 @@ def main() -> None:
                 model,
                 DISH_CLASSES,
                 args.image_size,
-                metadata={"best_val_acc": best_val_acc, "epoch": epoch},
+                metadata={"best_val_acc": best_val_acc, "epoch": epoch, "arch": args.arch},
+                arch=args.arch,
             )
 
     save_class_names()
@@ -178,6 +192,9 @@ def main() -> None:
     (REPORTS_DIR / "training_history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
     plot_history(history, REPORTS_DIR / "training_history.png")
 
+    if args.model_out.exists():
+        model, _, _, checkpoint = load_checkpoint(args.model_out, device)
+        print(f"Loaded best checkpoint for test: epoch={checkpoint.get('metadata', {}).get('epoch')}, val_acc={checkpoint.get('metadata', {}).get('best_val_acc')}")
     y_true, y_pred = collect_predictions(model, test_loader, device)
     report = classification_report(y_true, y_pred, labels=list(range(len(DISH_CLASSES))), target_names=DISH_CLASSES, zero_division=0)
     (REPORTS_DIR / "classification_report.txt").write_text(report, encoding="utf-8")
