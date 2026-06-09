@@ -27,6 +27,7 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
     )
 }
+NEGATIVE_TERMS = ["-logo", "-icon", "-emoji", "-clipart", "-vector", "-cartoon"]
 
 
 def read_queries(path: Path) -> list[tuple[str, str]]:
@@ -69,11 +70,23 @@ def append_manifest_row(path: Path, row: dict[str, str]) -> None:
 
 
 def refine_query(query: str, *, strict_phrase: bool = False) -> str:
-    negative_terms = "-logo -icon -emoji -clipart -vector -cartoon"
     query = query.strip()
     if strict_phrase and not (query.startswith('"') and query.endswith('"')):
         query = f'"{query}"'
-    return f"{query} {negative_terms}"
+    tokens = set(query.split())
+    missing_terms = [term for term in NEGATIVE_TERMS if term not in tokens]
+    return " ".join([query, *missing_terms]).strip()
+
+
+def existing_short_digests(out_dir: Path) -> set[str]:
+    digests: set[str] = set()
+    if not out_dir.exists():
+        return digests
+    for path in out_dir.glob("*.*"):
+        match = re.search(r"_([0-9a-f]{16})$", path.stem)
+        if match:
+            digests.add(match.group(1))
+    return digests
 
 
 def find_bing_image_urls(query: str, max_urls: int) -> list[str]:
@@ -132,19 +145,23 @@ def validate_image(path: Path, min_size: int) -> bool:
         return False
 
 
-def download_url(url: str, out_dir: Path, prefix: str, min_size: int) -> Path | None:
+def download_url(url: str, out_dir: Path, prefix: str, min_size: int, seen_digests: set[str]) -> Path | None:
     try:
         response = requests.get(url, headers=HEADERS, timeout=25)
         response.raise_for_status()
         digest = hashlib.sha256(response.content).hexdigest()[:16]
+        if digest in seen_digests:
+            return None
         suffix = safe_suffix(response.headers.get("content-type", ""), url)
         out_path = out_dir / f"{prefix}_{digest}{suffix}"
         if out_path.exists():
+            seen_digests.add(digest)
             return None
         out_path.write_bytes(response.content)
         if not validate_image(out_path, min_size):
             out_path.unlink(missing_ok=True)
             return None
+        seen_digests.add(digest)
         return out_path
     except Exception:
         return None
@@ -170,12 +187,16 @@ def main() -> None:
         queries = [(class_name, query) for class_name, query in queries if class_name == args.class_name]
 
     counts: dict[str, int] = {}
+    digest_cache: dict[str, set[str]] = {}
+    seen_urls: dict[str, set[str]] = {}
     args.out.mkdir(parents=True, exist_ok=True)
     for class_name, query in queries:
         search_query = query if args.raw_query else refine_query(query, strict_phrase=args.strict_phrase)
         class_dir = args.out / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
         counts.setdefault(class_name, len(list(class_dir.glob("*.*"))))
+        digest_cache.setdefault(class_name, existing_short_digests(class_dir))
+        seen_urls.setdefault(class_name, set())
         if counts[class_name] >= args.max_downloads_per_class:
             continue
         print(f"Searching [{class_name}] {search_query}")
@@ -205,7 +226,10 @@ def main() -> None:
         for idx, url in enumerate(urls):
             if counts[class_name] >= args.max_downloads_per_class:
                 break
-            out_path = download_url(url, class_dir, f"{class_name}_{idx:03d}", args.min_size)
+            if url in seen_urls[class_name]:
+                continue
+            seen_urls[class_name].add(url)
+            out_path = download_url(url, class_dir, f"{class_name}_{idx:03d}", args.min_size, digest_cache[class_name])
             if out_path:
                 counts[class_name] += 1
                 append_manifest_row(
