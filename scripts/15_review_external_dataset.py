@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import mimetypes
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -31,6 +32,9 @@ ACTION_FIELDS = [
     "output_path",
 ]
 
+MODEL_DECISIONS = ["auto_accepted", "needs_review", "ambiguous_review", "model_rejected"]
+DEFAULT_EXTRA_LABELS = ["mon_khac", "future_use", "khay_background"]
+
 
 @dataclass(frozen=True)
 class ReviewItem:
@@ -44,6 +48,10 @@ class ReviewItem:
     method: str
     source_dataset: str
     label_name: str
+    model_class: str
+    model_confidence: str
+    model_decision: str
+    model_reason: str
 
 
 def relative_or_absolute(path: Path) -> str:
@@ -81,8 +89,25 @@ def load_manifest(staging_root: Path) -> dict[str, dict[str, str]]:
     return rows
 
 
+def load_model_suggestions(staging_root: Path) -> dict[str, dict[str, str]]:
+    suggestions_path = staging_root / "reports" / "model_suggestions.csv"
+    rows: dict[str, dict[str, str]] = {}
+    if not suggestions_path.exists():
+        return rows
+    with suggestions_path.open("r", encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            source_path = row.get("source_path") or ""
+            if not source_path:
+                continue
+            path = Path(source_path)
+            resolved = path if path.is_absolute() else PROJECT_ROOT / path
+            rows[str(resolved.resolve())] = row
+    return rows
+
+
 def list_review_items(staging_root: Path) -> list[ReviewItem]:
     manifest = load_manifest(staging_root)
+    model_suggestions = load_model_suggestions(staging_root)
     review_root = staging_root / "review"
     items: list[ReviewItem] = []
     if not review_root.exists():
@@ -92,7 +117,12 @@ def list_review_items(staging_root: Path) -> list[ReviewItem]:
             if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
                 continue
             meta = manifest.get(str(path.resolve()), {})
+            model_meta = model_suggestions.get(str(path.resolve()), {})
             item_id = stable_item_id(staging_root, path)
+            model_class = model_meta.get("top1_class", "")
+            suggested_class = meta.get("suggested_class", "")
+            if model_class and not suggested_class and model_meta.get("decision") != "model_rejected":
+                suggested_class = model_class
             items.append(
                 ReviewItem(
                     item_id=item_id,
@@ -100,11 +130,15 @@ def list_review_items(staging_root: Path) -> list[ReviewItem]:
                     path=path,
                     rel_path=relative_or_absolute(path),
                     filename=path.name,
-                    suggested_class=meta.get("suggested_class", ""),
+                    suggested_class=suggested_class,
                     needs_review=str(meta.get("needs_review", "true")).lower() == "true",
                     method=meta.get("method", ""),
                     source_dataset=meta.get("source_dataset", ""),
                     label_name=meta.get("label_name", ""),
+                    model_class=model_class,
+                    model_confidence=model_meta.get("top1_confidence", ""),
+                    model_decision=model_meta.get("decision", ""),
+                    model_reason=model_meta.get("reason", ""),
                 )
             )
     return items
@@ -113,8 +147,44 @@ def list_review_items(staging_root: Path) -> list[ReviewItem]:
 def ensure_review_dirs(staging_root: Path) -> None:
     for class_name in DISH_CLASSES:
         (staging_root / "reviewed" / class_name).mkdir(parents=True, exist_ok=True)
+    (staging_root / "reviewed_extra").mkdir(parents=True, exist_ok=True)
     (staging_root / "manual_rejected").mkdir(parents=True, exist_ok=True)
     (staging_root / "reports").mkdir(parents=True, exist_ok=True)
+
+
+def extra_labels_path(staging_root: Path) -> Path:
+    return staging_root / "reports" / "extra_labels.json"
+
+
+def slugify_label(value: str) -> str:
+    value = value.strip().lower().replace("đ", "d")
+    value = re.sub(r"[^a-z0-9_ -]+", "", value)
+    value = re.sub(r"[\s-]+", "_", value)
+    value = re.sub(r"_+", "_", value).strip("_")
+    if not value:
+        raise ValueError("Extra folder name cannot be empty")
+    return value[:80]
+
+
+def load_extra_labels(staging_root: Path) -> list[str]:
+    path = extra_labels_path(staging_root)
+    labels: list[str] = []
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                labels = [slugify_label(str(item)) for item in payload if str(item).strip()]
+        except Exception:
+            labels = []
+    if not labels:
+        labels = DEFAULT_EXTRA_LABELS[:]
+    return sorted(dict.fromkeys(labels))
+
+
+def save_extra_labels(staging_root: Path, labels: list[str]) -> None:
+    path = extra_labels_path(staging_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sorted(dict.fromkeys(labels)), indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def read_action_rows(path: Path) -> list[dict[str, str]]:
@@ -162,6 +232,15 @@ def unique_destination(folder: Path, filename: str) -> Path:
         idx += 1
 
 
+def count_images_by_folder(root: Path) -> dict[str, int]:
+    if not root.exists():
+        return {}
+    counts: dict[str, int] = {}
+    for folder in sorted(p for p in root.iterdir() if p.is_dir()):
+        counts[folder.name] = sum(1 for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+    return counts
+
+
 def is_inside(child: Path, parent: Path) -> bool:
     try:
         child.resolve().relative_to(parent.resolve())
@@ -174,6 +253,7 @@ class ReviewStore:
     def __init__(self, staging_root: Path):
         self.staging_root = staging_root.resolve()
         ensure_review_dirs(self.staging_root)
+        save_extra_labels(self.staging_root, load_extra_labels(self.staging_root))
         self.items = list_review_items(self.staging_root)
         self.items_by_id = {item.item_id: item for item in self.items}
         self.action_log = self.staging_root / "reports" / "review_actions.csv"
@@ -193,31 +273,59 @@ class ReviewStore:
             result.append({"name": pool, "total": total, "done": done, "remaining": total - done})
         return result
 
-    def filtered_items(self, pool: str, include_done: bool) -> list[ReviewItem]:
+    def filtered_items(self, pool: str, include_done: bool, model_decision: str = "") -> list[ReviewItem]:
         state = self.state()
         return [
             item
             for item in self.items
-            if (not pool or item.pool == pool) and (include_done or item.item_id not in state)
+            if (not pool or item.pool == pool)
+            and (not model_decision or item.model_decision == model_decision)
+            and (include_done or item.item_id not in state)
         ]
 
     def stats(self) -> dict[str, object]:
         state = self.state()
         by_action = {}
         by_class = {}
+        by_extra = {}
         for row in state.values():
             action = row.get("action", "")
             by_action[action] = by_action.get(action, 0) + 1
             if action == "label":
                 class_name = row.get("class_name", "")
                 by_class[class_name] = by_class.get(class_name, 0) + 1
+            if action == "label_extra":
+                class_name = row.get("class_name", "")
+                by_extra[class_name] = by_extra.get(class_name, 0) + 1
+        reviewed_counts = count_images_by_folder(self.staging_root / "reviewed")
+        extra_counts = count_images_by_folder(self.staging_root / "reviewed_extra")
+        rejected_counts = count_images_by_folder(self.staging_root / "manual_rejected")
         return {
             "total": len(self.items),
             "done": len(state),
             "remaining": len(self.items) - len(state),
             "by_action": by_action,
             "by_class": by_class,
+            "by_extra": by_extra,
+            "library": {
+                "reviewed_total": sum(reviewed_counts.values()),
+                "extra_total": sum(extra_counts.values()),
+                "rejected_total": sum(rejected_counts.values()),
+                "reviewed_by_class": reviewed_counts,
+                "extra_by_label": extra_counts,
+                "rejected_by_pool": rejected_counts,
+            },
         }
+
+    def model_decisions(self) -> list[dict[str, object]]:
+        state = self.state()
+        result = []
+        known_decisions = sorted({item.model_decision for item in self.items if item.model_decision})
+        for decision in [name for name in MODEL_DECISIONS if name in known_decisions]:
+            total = sum(1 for item in self.items if item.model_decision == decision)
+            done = sum(1 for item in self.items if item.model_decision == decision and item.item_id in state)
+            result.append({"name": decision, "total": total, "done": done, "remaining": total - done})
+        return result
 
     def serialize_item(self, item: ReviewItem) -> dict[str, object]:
         return {
@@ -230,11 +338,15 @@ class ReviewStore:
             "method": item.method,
             "source_dataset": item.source_dataset,
             "label_name": item.label_name,
+            "model_class": item.model_class,
+            "model_confidence": item.model_confidence,
+            "model_decision": item.model_decision,
+            "model_reason": item.model_reason,
             "image_url": f"/media/{item.item_id}",
         }
 
-    def api_state(self, pool: str, index: int, include_done: bool) -> dict[str, object]:
-        items = self.filtered_items(pool, include_done)
+    def api_state(self, pool: str, index: int, include_done: bool, model_decision: str = "") -> dict[str, object]:
+        items = self.filtered_items(pool, include_done, model_decision)
         if items:
             index = max(0, min(index, len(items) - 1))
             current = self.serialize_item(items[index])
@@ -247,7 +359,10 @@ class ReviewStore:
             "staging_root": relative_or_absolute(self.staging_root),
             "pools": self.pools(),
             "classes": [{"name": name, "display_name": DISPLAY_NAMES.get(name, name)} for name in DISH_CLASSES],
+            "extra_labels": self.extra_labels(),
+            "model_decisions": self.model_decisions(),
             "selected_pool": pool,
+            "selected_model_decision": model_decision,
             "index": index,
             "count": len(items),
             "current": current,
@@ -256,18 +371,37 @@ class ReviewStore:
             "include_done": include_done,
         }
 
+    def extra_labels(self) -> list[str]:
+        return load_extra_labels(self.staging_root)
+
+    def add_extra_label(self, label: str) -> dict[str, object]:
+        slug = slugify_label(label)
+        labels = self.extra_labels()
+        if slug not in labels:
+            labels.append(slug)
+            save_extra_labels(self.staging_root, labels)
+        (self.staging_root / "reviewed_extra" / slug).mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "label": slug, "labels": self.extra_labels()}
+
     def action(self, item_id: str, action: str, class_name: str = "") -> dict[str, object]:
         if item_id not in self.items_by_id:
             raise ValueError("Unknown item id")
-        if action not in {"label", "reject", "skip"}:
+        if action not in {"label", "label_extra", "reject", "skip"}:
             raise ValueError("Unsupported action")
         if action == "label" and class_name not in DISH_CLASSES:
             raise ValueError("Invalid class name")
+        if action == "label_extra":
+            class_name = self.add_extra_label(class_name)["label"]
 
         item = self.items_by_id[item_id]
         output = ""
         if action == "label":
             target_dir = self.staging_root / "reviewed" / class_name
+            target = unique_destination(target_dir, f"{item.pool}_{item.filename}")
+            shutil.copy2(item.path, target)
+            output = relative_or_absolute(target)
+        elif action == "label_extra":
+            target_dir = self.staging_root / "reviewed_extra" / class_name
             target = unique_destination(target_dir, f"{item.pool}_{item.filename}")
             shutil.copy2(item.path, target)
             output = relative_or_absolute(target)
@@ -484,6 +618,19 @@ INDEX_HTML = r"""<!doctype html>
       gap: 8px;
       margin: 12px 0;
     }
+    .extra-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      margin: 8px 0 12px;
+    }
+    input {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px 10px;
+      min-width: 0;
+      font: inherit;
+    }
     .cmd {
       text-align: center;
       margin: 0;
@@ -526,8 +673,13 @@ INDEX_HTML = r"""<!doctype html>
       <div class="stats">
         <div class="stat"><div class="small">Done</div><strong id="done">0</strong></div>
         <div class="stat"><div class="small">Left</div><strong id="left">0</strong></div>
+        <div class="stat"><div class="small">Reviewed</div><strong id="reviewedCount">0</strong></div>
+        <div class="stat"><div class="small">Extra</div><strong id="extraCount">0</strong></div>
+        <div class="stat"><div class="small">Rejected</div><strong id="rejectedCount">0</strong></div>
       </div>
       <div id="pools"></div>
+      <h1>Model Filter</h1>
+      <div id="decisionFilters"></div>
     </aside>
     <main>
       <header>
@@ -545,6 +697,12 @@ INDEX_HTML = r"""<!doctype html>
     <aside class="right">
       <h2>Classes</h2>
       <div id="classes"></div>
+      <h2>Extra Folders</h2>
+      <div id="extraLabels"></div>
+      <div class="extra-row">
+        <input id="extraInput" type="text" placeholder="mon_ngoai_de" />
+        <button id="addExtra" class="cmd skip">Add</button>
+      </div>
       <div class="cmd-row">
         <button id="reject" class="cmd reject">Reject</button>
         <button id="skip" class="cmd skip">Skip</button>
@@ -559,6 +717,11 @@ INDEX_HTML = r"""<!doctype html>
         <strong id="suggested"></strong>
       </div>
       <div class="field">
+        <div class="small">Model</div>
+        <strong id="model"></strong>
+        <div id="modelDecision" class="meta"></div>
+      </div>
+      <div class="field">
         <div class="small">Source</div>
         <div id="source" class="meta"></div>
       </div>
@@ -570,6 +733,7 @@ INDEX_HTML = r"""<!doctype html>
   </div>
   <script>
     let pool = "";
+    let modelDecision = "";
     let index = 0;
     let state = null;
     let currentId = null;
@@ -582,7 +746,7 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function load() {
-      const params = new URLSearchParams({ pool, index: String(index) });
+      const params = new URLSearchParams({ pool, decision: modelDecision, index: String(index) });
       state = await request("/api/state?" + params.toString());
       render();
     }
@@ -591,9 +755,14 @@ INDEX_HTML = r"""<!doctype html>
       document.getElementById("root").textContent = state.staging_root;
       document.getElementById("done").textContent = state.stats.done;
       document.getElementById("left").textContent = state.stats.remaining;
+      document.getElementById("reviewedCount").textContent = state.stats.library.reviewed_total;
+      document.getElementById("extraCount").textContent = state.stats.library.extra_total;
+      document.getElementById("rejectedCount").textContent = state.stats.library.rejected_total;
       renderPools();
+      renderDecisionFilters();
       renderCurrent();
       renderClasses();
+      renderExtraLabels();
       renderThumbs();
     }
 
@@ -614,6 +783,23 @@ INDEX_HTML = r"""<!doctype html>
       });
     }
 
+    function renderDecisionFilters() {
+      const box = document.getElementById("decisionFilters");
+      box.innerHTML = "";
+      const all = document.createElement("button");
+      all.className = "pool" + (modelDecision === "" ? " active" : "");
+      all.innerHTML = `<span>All decisions</span><span class="badge">${state.stats.remaining}/${state.stats.total}</span>`;
+      all.onclick = () => { modelDecision = ""; index = 0; load(); };
+      box.appendChild(all);
+      state.model_decisions.forEach(d => {
+        const btn = document.createElement("button");
+        btn.className = "pool" + (modelDecision === d.name ? " active" : "");
+        btn.innerHTML = `<span>${d.name}</span><span class="badge">${d.remaining}/${d.total}</span>`;
+        btn.onclick = () => { modelDecision = d.name; index = 0; load(); };
+        box.appendChild(btn);
+      });
+    }
+
     function renderCurrent() {
       const wrap = document.getElementById("imageWrap");
       const item = state.current;
@@ -625,6 +811,8 @@ INDEX_HTML = r"""<!doctype html>
         document.getElementById("counter").textContent = "0 / 0";
         document.getElementById("poolName").textContent = "";
         document.getElementById("suggested").textContent = "";
+        document.getElementById("model").textContent = "";
+        document.getElementById("modelDecision").textContent = "";
         document.getElementById("source").textContent = "";
         document.getElementById("file").textContent = "";
         return;
@@ -635,6 +823,11 @@ INDEX_HTML = r"""<!doctype html>
       document.getElementById("counter").textContent = `${state.index + 1} / ${state.count}`;
       document.getElementById("poolName").textContent = item.pool;
       document.getElementById("suggested").textContent = item.suggested_class || "-";
+      const confidence = item.model_confidence ? Number(item.model_confidence) : null;
+      document.getElementById("model").textContent = item.model_class
+        ? `${item.model_class} (${confidence === null ? "?" : (confidence * 100).toFixed(1) + "%"})`
+        : "-";
+      document.getElementById("modelDecision").textContent = [item.model_decision, item.model_reason].filter(Boolean).join(" | ") || "-";
       document.getElementById("source").textContent = item.source_dataset || "-";
       document.getElementById("file").textContent = item.filename;
     }
@@ -648,6 +841,18 @@ INDEX_HTML = r"""<!doctype html>
         btn.className = "class-btn" + (cls.name === suggested ? " suggested" : "");
         btn.textContent = cls.name;
         btn.onclick = () => act("label", cls.name);
+        box.appendChild(btn);
+      });
+    }
+
+    function renderExtraLabels() {
+      const box = document.getElementById("extraLabels");
+      box.innerHTML = "";
+      state.extra_labels.forEach(label => {
+        const btn = document.createElement("button");
+        btn.className = "class-btn";
+        btn.textContent = label;
+        btn.onclick = () => act("label_extra", label);
         box.appendChild(btn);
       });
     }
@@ -691,6 +896,19 @@ INDEX_HTML = r"""<!doctype html>
       await load();
     }
 
+    async function addExtraLabel() {
+      const input = document.getElementById("extraInput");
+      const label = input.value.trim();
+      if (!label) return;
+      await request("/api/extra-label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label })
+      });
+      input.value = "";
+      await load();
+    }
+
     function move(delta) {
       index += delta;
       if (index < 0) index = 0;
@@ -701,8 +919,16 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("reject").onclick = () => act("reject");
     document.getElementById("skip").onclick = () => act("skip");
     document.getElementById("undo").onclick = undo;
+    document.getElementById("addExtra").onclick = addExtraLabel;
+    document.getElementById("extraInput").addEventListener("keydown", event => {
+      if (event.key === "Enter") {
+        event.stopPropagation();
+        addExtraLabel();
+      }
+    });
 
     document.addEventListener("keydown", (event) => {
+      if (event.target && event.target.tagName === "INPUT") return;
       if (!state || !state.current) return;
       const n = Number(event.key);
       if (n >= 1 && n <= 9) {
@@ -771,9 +997,18 @@ class ReviewHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/state":
                 query = parse_qs(parsed.query)
                 pool = query.get("pool", [""])[0]
+                model_decision = query.get("decision", [""])[0]
                 index = int(query.get("index", ["0"])[0])
                 include_done = query.get("include_done", ["false"])[0].lower() == "true"
-                json_response(self, self.store.api_state(pool=pool, index=index, include_done=include_done))
+                json_response(
+                    self,
+                    self.store.api_state(
+                        pool=pool,
+                        index=index,
+                        include_done=include_done,
+                        model_decision=model_decision,
+                    ),
+                )
                 return
             if parsed.path.startswith("/media/"):
                 item_id = parsed.path.rsplit("/", 1)[-1]
@@ -810,6 +1045,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/undo":
                 json_response(self, self.store.undo(data.get("id", "")))
+                return
+            if parsed.path == "/api/extra-label":
+                json_response(self, self.store.add_extra_label(data.get("label", "")))
                 return
             text_response(self, "Not found", HTTPStatus.NOT_FOUND)
         except Exception as exc:

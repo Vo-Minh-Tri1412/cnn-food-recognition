@@ -14,6 +14,8 @@ from canteen_checkout.config import ARCHIVE_DIR, PROJECT_ROOT
 
 
 ARTIFACT_TARGETS = [
+    "scripts/__pycache__",
+    "canteen_checkout/__pycache__",
     "outputs/smoke_dataset",
     "outputs/smoke_model.pt",
     "outputs/bills",
@@ -27,6 +29,20 @@ ARTIFACT_TARGETS = [
     "outputs/reports/teacher_contact_sheet_30_55.jpg",
     "outputs/reports/teacher_seed_crops_contact_sheet.jpg",
 ]
+
+OPTIONAL_GLOBS = {
+    "review_sheets": [
+        "outputs/reports/scraped_review_sheets",
+        "data/downloads/external_staging/external_*/reports/review_sheets",
+    ],
+    "model_assisted": [
+        "data/downloads/external_staging/external_*/model_assisted",
+        "outputs/reports/model_assisted_filter/run_*",
+    ],
+    "scrape_batches": [
+        "data/downloads/scrape_batches/*",
+    ],
+}
 
 
 def size_bytes(path: Path) -> int:
@@ -42,12 +58,26 @@ def archive_path_for(path: Path, archive_root: Path) -> Path:
     return archive_root / rel
 
 
+def expand_targets(include_groups: list[str]) -> list[Path]:
+    targets = [PROJECT_ROOT / item for item in ARTIFACT_TARGETS if (PROJECT_ROOT / item).exists()]
+    for group in include_groups:
+        for pattern in OPTIONAL_GLOBS[group]:
+            targets.extend(p for p in PROJECT_ROOT.glob(pattern) if p.exists())
+    unique: dict[str, Path] = {}
+    for path in targets:
+        unique[str(path.resolve())] = path
+    return sorted(unique.values(), key=lambda p: p.as_posix())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Safely clean generated project artifacts.")
     parser.add_argument("--apply", action="store_true", help="Actually archive/delete files. Default is dry-run.")
     parser.add_argument("--dry-run", action="store_true", help="Preview cleanup targets. This is also the default.")
     parser.add_argument("--mode", choices=["archive", "delete"], default="archive")
     parser.add_argument("--archive-root", type=Path, default=None)
+    parser.add_argument("--include-review-sheets", action="store_true", help="Also archive/delete generated contact sheet folders.")
+    parser.add_argument("--include-model-assisted", action="store_true", help="Also archive/delete generated model-assisted grouping folders.")
+    parser.add_argument("--include-scrape-batches", action="store_true", help="Also archive/delete old scrape batch folders.")
     args = parser.parse_args()
     if args.apply and args.dry_run:
         parser.error("Use either --apply or --dry-run, not both.")
@@ -55,7 +85,14 @@ def main() -> None:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_root = args.archive_root or (ARCHIVE_DIR / f"workspace_cleanup_{timestamp}")
-    targets = [PROJECT_ROOT / item for item in ARTIFACT_TARGETS if (PROJECT_ROOT / item).exists()]
+    include_groups = []
+    if args.include_review_sheets:
+        include_groups.append("review_sheets")
+    if args.include_model_assisted:
+        include_groups.append("model_assisted")
+    if args.include_scrape_batches:
+        include_groups.append("scrape_batches")
+    targets = expand_targets(include_groups)
 
     print("Cleanup mode:", args.mode)
     print("Dry run:", dry_run)

@@ -9,6 +9,52 @@ The current project is set up to:
 3. crop dish regions from tray images;
 4. classify each crop, look up `prices.csv`, and export a bill JSON.
 
+## Recommended Workflow Now
+
+The fastest path is no longer "open every image and review by hand". Use the model to pre-filter first:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\14_import_external_datasets.py
+.\.venv\Scripts\python.exe scripts\16_model_assisted_filter.py --epochs 3 --apply
+.\.venv\Scripts\python.exe scripts\15_review_external_dataset.py --staging data\downloads\external_staging\external_20260609_115250 --port 7860
+```
+
+What this does:
+
+- trains a temporary dataset-filter model from the latest curated merge under `data/downloads/merge_batches/*/processed`;
+- predicts every image/crop in the latest external staging review pool;
+- groups candidates into `model_assisted/auto_accepted`, `model_assisted/needs_review`, `model_assisted/ambiguous_review`, and `model_assisted/model_rejected`;
+- writes `reports/model_suggestions.csv` so the review app can show model prediction, confidence, and decision reason.
+
+When you trust the threshold enough, add `--promote-auto` to copy very confident predictions straight into `reviewed/<class_name>/`:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\16_model_assisted_filter.py --skip-train --apply --promote-auto
+```
+
+Use this carefully. It is meant for high-confidence candidates only; ambiguous classes still need review.
+
+### Active Learning Loop
+
+After one review pass, retrain the filter from the baseline plus your newly reviewed labels, then regroup the staging data:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\16_model_assisted_filter.py --force-train --include-staging-reviewed --epochs 5 --apply
+```
+
+Only `reviewed/<class_name>` is used as training seed for the 11-class billing problem. The app also supports `reviewed_extra/<label>` for useful food images outside the assignment, but those extra folders are intentionally ignored by the billing classifier.
+
+Current data policy:
+
+```text
+review/<pool>/                 # raw candidates/crops to review
+model_assisted/<decision>/     # generated grouping from the filter model
+reviewed/<11 class>/           # trusted labels used for training
+reviewed_extra/<custom label>/ # useful, outside the current 11-class problem
+manual_rejected/<pool>/        # bad or irrelevant images
+reports/*.csv|*.json           # manifests, logs, model suggestions
+```
+
 ## Environment
 
 The local environment has already been created at `.venv/` with Python 3.12.
@@ -62,6 +108,9 @@ scripts/
   11_promote_reviewed_images.py
   12_clean_workspace.py
   13_preprocess_candidates.py
+  14_import_external_datasets.py
+  15_review_external_dataset.py
+  16_model_assisted_filter.py
 notebooks/
   00_setup_and_inventory.ipynb
   01_train_classifier.ipynb
@@ -222,6 +271,55 @@ For faster local review, launch the browser UI:
 
 The app copies accepted images into `reviewed/<class_name>/`, copies rejects into `manual_rejected/`, and logs every action to `reports/review_actions.csv`.
 
+If `scripts/16_model_assisted_filter.py` has already run, the app also shows model prediction, confidence, decision, and reason. Use the left sidebar's model filter to open only `needs_review`, `ambiguous_review`, or `model_rejected` items.
+
+Use the `Extra Folders` panel for images that are useful later but outside the current 11-class price table. These are copied to `reviewed_extra/<label>` and are not promoted into `data/classification` by the normal 11-class workflow.
+
+## Model-Assisted Dataset Filtering
+
+After external import, let the current seed dataset do the first pass:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\16_model_assisted_filter.py --epochs 3 --apply
+```
+
+Default inputs:
+
+- seed dataset: newest `data/downloads/merge_batches/merge_*/processed`;
+- staging dataset: newest `data/downloads/external_staging/external_*`;
+- model output: `models/data_filter_classifier.pt`.
+
+Important thresholds:
+
+```powershell
+--auto-accept-confidence 0.92
+--review-confidence 0.55
+--reject-confidence 0.25
+--min-margin 0.15
+```
+
+Recommended usage:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\16_model_assisted_filter.py --force-train --epochs 3 --apply
+.\.venv\Scripts\python.exe scripts\16_model_assisted_filter.py --skip-train --apply --promote-auto
+```
+
+The first command groups the data for inspection. The second command copies only high-confidence predictions into `reviewed/<class_name>/`. After that, use the review app for ambiguous folders only.
+
+For later passes, include your reviewed labels so the filter improves:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\16_model_assisted_filter.py --force-train --include-staging-reviewed --epochs 5 --apply
+```
+
+When enough labels are trustworthy, promote reviewed data:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\11_promote_reviewed_images.py --source data\downloads\external_staging\external_20260609_115250\reviewed --prefix external --dry-run
+.\.venv\Scripts\python.exe scripts\11_promote_reviewed_images.py --source data\downloads\external_staging\external_20260609_115250\reviewed --prefix external
+```
+
 ## Clean Workspace Artifacts
 
 Archive smoke-test outputs and old demo artifacts without touching source data:
@@ -232,6 +330,15 @@ Archive smoke-test outputs and old demo artifacts without touching source data:
 ```
 
 Use `--mode delete` only when you are sure the listed files are not needed.
+
+Optional generated cleanup groups:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\12_clean_workspace.py --dry-run --include-review-sheets --include-model-assisted
+.\.venv\Scripts\python.exe scripts\12_clean_workspace.py --apply --mode archive --include-review-sheets --include-model-assisted
+```
+
+Old web scrape batches can also be archived with `--include-scrape-batches`. Keep this off unless you are sure those raw batches are no longer useful.
 
 ## Download Public Dataset Notes
 
