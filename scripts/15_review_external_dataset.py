@@ -258,9 +258,13 @@ class ReviewStore:
         self.staging_root = staging_root.resolve()
         ensure_review_dirs(self.staging_root)
         save_extra_labels(self.staging_root, load_extra_labels(self.staging_root))
+        self.action_log = self.staging_root / "reports" / "review_actions.csv"
+        self.reload()
+
+    def reload(self) -> dict[str, object]:
         self.items = list_review_items(self.staging_root)
         self.items_by_id = {item.item_id: item for item in self.items}
-        self.action_log = self.staging_root / "reports" / "review_actions.csv"
+        return {"ok": True, "items": len(self.items), "pools": self.pools()}
 
     def rows(self) -> list[dict[str, str]]:
         return read_action_rows(self.action_log)
@@ -705,6 +709,7 @@ INDEX_HTML = r"""<!doctype html>
     <aside>
       <h1>Dataset Review</h1>
       <div id="root" class="meta"></div>
+      <button id="reloadFiles" class="cmd">Reload Files</button>
       <div class="stats">
         <div class="stat"><div class="small">Done</div><strong id="done">0</strong></div>
         <div class="stat"><div class="small">Left</div><strong id="left">0</strong></div>
@@ -800,6 +805,13 @@ INDEX_HTML = r"""<!doctype html>
       const params = new URLSearchParams({ pool, decision: modelDecision, index: String(index) });
       state = await request("/api/state?" + params.toString());
       render();
+    }
+
+    async function reloadFiles() {
+      await request("/api/reload", { method: "POST" });
+      selectedIds.clear();
+      index = 0;
+      await load();
     }
 
     function render() {
@@ -1019,6 +1031,7 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("reject").onclick = () => act("reject");
     document.getElementById("skip").onclick = () => act("skip");
     document.getElementById("undo").onclick = undo;
+    document.getElementById("reloadFiles").onclick = reloadFiles;
     document.getElementById("selectVisible").onclick = () => {
       state.nearby.forEach(item => selectedIds.add(item.id));
       renderThumbs();
@@ -1061,6 +1074,8 @@ INDEX_HTML = r"""<!doctype html>
         act("reject");
       } else if (event.key.toLowerCase() === "s") {
         act("skip");
+      } else if (event.key.toLowerCase() === "r") {
+        reloadFiles();
       } else if (event.key === "ArrowRight") {
         move(1);
       } else if (event.key === "ArrowLeft") {
@@ -1169,6 +1184,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/extra-label":
                 json_response(self, self.store.add_extra_label(data.get("label", "")))
+                return
+            if parsed.path == "/api/reload":
+                json_response(self, self.store.reload())
                 return
             text_response(self, "Not found", HTTPStatus.NOT_FOUND)
         except Exception as exc:

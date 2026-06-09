@@ -311,6 +311,8 @@ If `scripts/16_model_assisted_filter.py` has already run, the app also shows mod
 
 Use the `Extra Folders` panel for images that are useful later but outside the current 11-class price table. These are copied to `reviewed_extra/<label>` and are not promoted into `data/classification` by the normal 11-class workflow.
 
+If you delete, move, or copy files outside the app, click `Reload Files` in the sidebar or press `r`. The server keeps an in-memory file list for speed, so outside changes are visible after reload.
+
 ## Model-Assisted Dataset Filtering
 
 After external import, let the current seed dataset do the first pass:
