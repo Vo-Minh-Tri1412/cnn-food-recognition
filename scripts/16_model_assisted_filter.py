@@ -81,6 +81,9 @@ class CandidatePrediction:
     decision: str
     reason: str
     target_class: str
+    phash: str
+    duplicate_of: str
+    duplicate_distance: str
 
 
 class PathImageDataset(Dataset):
@@ -271,6 +274,14 @@ def reviewed_seed_root(args) -> Path:
     return staging_root / "reviewed"
 
 
+def seed_roots_from_args(args) -> list[Path]:
+    seed_roots = [args.seed_source or latest_merge_processed()]
+    seed_roots.extend(args.extra_seed_source or [])
+    if args.include_staging_reviewed:
+        seed_roots.append(reviewed_seed_root(args))
+    return seed_roots
+
+
 def train_epoch(model, loader, criterion, optimizer, device) -> tuple[float, float]:
     model.train()
     total_loss = 0.0
@@ -308,11 +319,7 @@ def eval_epoch(model, loader, criterion, device) -> tuple[float, float]:
 
 
 def train_seed_model(args) -> tuple[Path, dict[str, object]]:
-    seed_roots = [args.seed_source or latest_merge_processed()]
-    seed_roots.extend(args.extra_seed_source or [])
-    if args.include_staging_reviewed:
-        seed_roots.append(reviewed_seed_root(args))
-
+    seed_roots = seed_roots_from_args(args)
     train_samples: list[SeedSample] = []
     val_samples: list[SeedSample] = []
     test_samples: list[SeedSample] = []
@@ -429,6 +436,66 @@ def candidate_paths(staging_root: Path) -> list[Path]:
     return sorted(p for p in review_root.glob("*/*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
 
 
+def nearest_duplicate(phash: str, references: list[tuple[str, Path]], threshold: int) -> tuple[Path, int] | None:
+    best_path: Path | None = None
+    best_distance: int | None = None
+    for old_phash, old_path in references:
+        distance = hamming_distance_hex(phash, old_phash)
+        if distance <= threshold and (best_distance is None or distance < best_distance):
+            best_path = old_path
+            best_distance = distance
+    if best_path is None or best_distance is None:
+        return None
+    return best_path, best_distance
+
+
+def seed_phash_references(args) -> list[tuple[str, Path]]:
+    references: list[tuple[str, Path]] = []
+    for seed_root in seed_roots_from_args(args):
+        if not seed_root.exists():
+            continue
+        for path in list_images(seed_root):
+            _, metrics, _ = assess_image(path)
+            if metrics is not None:
+                references.append((metrics.phash, path))
+    return references
+
+
+def duplicate_overrides(
+    paths: list[Path],
+    args,
+) -> tuple[dict[str, tuple[str, str, str]], dict[str, int], dict[str, str]]:
+    if args.disable_duplicate_gate:
+        return {}, {"seed_references": 0, "duplicate_seed": 0, "duplicate_candidate": 0}, {}
+
+    seed_references = seed_phash_references(args)
+    candidate_references: list[tuple[str, Path]] = []
+    overrides: dict[str, tuple[str, str, str]] = {}
+    phashes: dict[str, str] = {}
+    counts = {"seed_references": len(seed_references), "duplicate_seed": 0, "duplicate_candidate": 0}
+
+    for path in paths:
+        _, metrics, _ = assess_image(path)
+        if metrics is None:
+            continue
+        resolved = str(path.resolve())
+        phashes[resolved] = metrics.phash
+        seed_duplicate = nearest_duplicate(metrics.phash, seed_references, args.duplicate_hamming)
+        if seed_duplicate is not None:
+            duplicate_path, distance = seed_duplicate
+            overrides[resolved] = ("duplicate_seed", relative_or_absolute(duplicate_path), str(distance))
+            counts["duplicate_seed"] += 1
+            continue
+        candidate_duplicate = nearest_duplicate(metrics.phash, candidate_references, args.duplicate_hamming)
+        if candidate_duplicate is not None:
+            duplicate_path, distance = candidate_duplicate
+            overrides[resolved] = ("duplicate_candidate", relative_or_absolute(duplicate_path), str(distance))
+            counts["duplicate_candidate"] += 1
+            continue
+        candidate_references.append((metrics.phash, path))
+    return overrides, counts, phashes
+
+
 def decide_prediction(
     *,
     pool: str,
@@ -479,6 +546,7 @@ def predict_candidates(args, model_path: Path) -> tuple[list[CandidatePrediction
     staging_root = args.staging or latest_external_staging()
     manifest = load_external_manifest(staging_root)
     paths = candidate_paths(staging_root)
+    duplicate_map, duplicate_counts, candidate_phashes = duplicate_overrides(paths, args)
     device = resolve_device()
     model, class_names, image_size, checkpoint = load_checkpoint(model_path, device)
     transform = eval_transforms(image_size)
@@ -488,6 +556,9 @@ def predict_candidates(args, model_path: Path) -> tuple[list[CandidatePrediction
     print(f"Staging: {staging_root}")
     print(f"Candidates: {len(paths)}")
     print(f"Model: {model_path}")
+    if not args.disable_duplicate_gate:
+        print(f"Duplicate seed references: {duplicate_counts['seed_references']}")
+        print(f"Duplicate gate: seed={duplicate_counts['duplicate_seed']}, candidate={duplicate_counts['duplicate_candidate']}")
 
     for images, path_strings in tqdm(loader, desc="predict"):
         images = images.to(device)
@@ -517,6 +588,11 @@ def predict_candidates(args, model_path: Path) -> tuple[list[CandidatePrediction
                 min_margin=args.min_margin,
                 strict_pool=not args.loose_pool,
             )
+            duplicate_reason, duplicate_of, duplicate_distance = duplicate_map.get(str(path.resolve()), ("", "", ""))
+            if duplicate_reason:
+                decision = "model_rejected"
+                reason = duplicate_reason
+                target_class = ""
             predictions.append(
                 CandidatePrediction(
                     path=path,
@@ -530,6 +606,9 @@ def predict_candidates(args, model_path: Path) -> tuple[list[CandidatePrediction
                     decision=decision,
                     reason=reason,
                     target_class=target_class,
+                    phash=candidate_phashes.get(str(path.resolve()), ""),
+                    duplicate_of=duplicate_of,
+                    duplicate_distance=duplicate_distance,
                 )
             )
 
@@ -538,7 +617,9 @@ def predict_candidates(args, model_path: Path) -> tuple[list[CandidatePrediction
         "model": relative_or_absolute(model_path),
         "checkpoint_metadata": checkpoint.get("metadata", {}),
         "decision_counts": dict(Counter(row.decision for row in predictions)),
+        "reason_counts": dict(Counter(row.reason for row in predictions)),
         "pool_counts": {pool: dict(counter) for pool, counter in decision_counts_by_pool(predictions).items()},
+        "duplicate_gate": duplicate_counts,
     }
     return predictions, summary
 
@@ -571,9 +652,12 @@ def copy_predictions(
     staging_root: Path,
     apply: bool,
     promote_auto: bool,
+    keep_existing_output: bool,
 ) -> Counter:
     counts: Counter = Counter()
     assisted_root = staging_root / "model_assisted"
+    if apply and assisted_root.exists() and not keep_existing_output:
+        shutil.rmtree(assisted_root)
     for row in predictions:
         if row.decision == "auto_accepted":
             folder = assisted_root / "auto_accepted" / row.target_class
@@ -612,6 +696,9 @@ def write_prediction_report(predictions: list[CandidatePrediction], path: Path) 
         "decision",
         "reason",
         "target_class",
+        "phash",
+        "duplicate_of",
+        "duplicate_distance",
     ]
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -630,6 +717,9 @@ def write_prediction_report(predictions: list[CandidatePrediction], path: Path) 
                     "decision": row.decision,
                     "reason": row.reason,
                     "target_class": row.target_class,
+                    "phash": row.phash,
+                    "duplicate_of": row.duplicate_of,
+                    "duplicate_distance": row.duplicate_distance,
                 }
             )
 
@@ -658,6 +748,8 @@ def main() -> None:
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--test-ratio", type=float, default=0.1)
     parser.add_argument("--seed-dedupe-threshold", type=int, default=4)
+    parser.add_argument("--duplicate-hamming", type=int, default=8, help="pHash Hamming threshold for seed/candidate duplicate gate before auto accept.")
+    parser.add_argument("--disable-duplicate-gate", action="store_true", help="Do not reject near-duplicates of seed or earlier candidate images.")
     parser.add_argument("--auto-accept-confidence", type=float, default=0.92)
     parser.add_argument("--review-confidence", type=float, default=0.55)
     parser.add_argument("--reject-confidence", type=float, default=0.25)
@@ -665,6 +757,7 @@ def main() -> None:
     parser.add_argument("--loose-pool", action="store_true", help="Allow predictions outside the source pool hints.")
     parser.add_argument("--apply", action="store_true", help="Copy predictions into staging/model_assisted. Default only writes reports.")
     parser.add_argument("--promote-auto", action="store_true", help="Also copy auto accepted images into staging/reviewed/<class>.")
+    parser.add_argument("--keep-existing-output", action="store_true", help="Do not clear staging/model_assisted before copying a new grouped run.")
     parser.add_argument("--report-dir", type=Path, default=REPORTS_DIR / "model_assisted_filter")
     args = parser.parse_args()
 
@@ -685,7 +778,13 @@ def main() -> None:
 
     predictions, summary = predict_candidates(args, model_path)
     staging_root = args.staging or latest_external_staging()
-    copy_counts = copy_predictions(predictions, staging_root=staging_root, apply=args.apply, promote_auto=args.promote_auto)
+    copy_counts = copy_predictions(
+        predictions,
+        staging_root=staging_root,
+        apply=args.apply,
+        promote_auto=args.promote_auto,
+        keep_existing_output=args.keep_existing_output,
+    )
 
     summary.update(
         {
@@ -693,6 +792,7 @@ def main() -> None:
             "promote_auto": args.promote_auto,
             "copy_counts": dict(copy_counts),
             "thresholds": {
+                "duplicate_hamming": args.duplicate_hamming,
                 "auto_accept_confidence": args.auto_accept_confidence,
                 "review_confidence": args.review_confidence,
                 "reject_confidence": args.reject_confidence,

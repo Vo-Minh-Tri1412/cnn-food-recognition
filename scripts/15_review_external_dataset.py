@@ -52,6 +52,8 @@ class ReviewItem:
     model_confidence: str
     model_decision: str
     model_reason: str
+    duplicate_of: str
+    duplicate_distance: str
 
 
 def relative_or_absolute(path: Path) -> str:
@@ -139,6 +141,8 @@ def list_review_items(staging_root: Path) -> list[ReviewItem]:
                     model_confidence=model_meta.get("top1_confidence", ""),
                     model_decision=model_meta.get("decision", ""),
                     model_reason=model_meta.get("reason", ""),
+                    duplicate_of=model_meta.get("duplicate_of", ""),
+                    duplicate_distance=model_meta.get("duplicate_distance", ""),
                 )
             )
     return items
@@ -342,6 +346,8 @@ class ReviewStore:
             "model_confidence": item.model_confidence,
             "model_decision": item.model_decision,
             "model_reason": item.model_reason,
+            "duplicate_of": item.duplicate_of,
+            "duplicate_distance": item.duplicate_distance,
             "image_url": f"/media/{item.item_id}",
         }
 
@@ -722,6 +728,10 @@ INDEX_HTML = r"""<!doctype html>
         <div id="modelDecision" class="meta"></div>
       </div>
       <div class="field">
+        <div class="small">Duplicate</div>
+        <div id="duplicate" class="meta"></div>
+      </div>
+      <div class="field">
         <div class="small">Source</div>
         <div id="source" class="meta"></div>
       </div>
@@ -813,6 +823,7 @@ INDEX_HTML = r"""<!doctype html>
         document.getElementById("suggested").textContent = "";
         document.getElementById("model").textContent = "";
         document.getElementById("modelDecision").textContent = "";
+        document.getElementById("duplicate").textContent = "";
         document.getElementById("source").textContent = "";
         document.getElementById("file").textContent = "";
         return;
@@ -828,6 +839,9 @@ INDEX_HTML = r"""<!doctype html>
         ? `${item.model_class} (${confidence === null ? "?" : (confidence * 100).toFixed(1) + "%"})`
         : "-";
       document.getElementById("modelDecision").textContent = [item.model_decision, item.model_reason].filter(Boolean).join(" | ") || "-";
+      document.getElementById("duplicate").textContent = item.duplicate_of
+        ? `${item.duplicate_of} (${item.duplicate_distance})`
+        : "-";
       document.getElementById("source").textContent = item.source_dataset || "-";
       document.getElementById("file").textContent = item.filename;
     }

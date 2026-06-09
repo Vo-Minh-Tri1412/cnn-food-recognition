@@ -24,6 +24,7 @@ What this does:
 - trains a temporary dataset-filter model from the latest curated merge under `data/downloads/merge_batches/*/processed`;
 - predicts every image/crop in the latest external staging review pool;
 - groups candidates into `model_assisted/auto_accepted`, `model_assisted/needs_review`, `model_assisted/ambiguous_review`, and `model_assisted/model_rejected`;
+- rejects near-duplicates of seed/reviewed images before they can become `auto_accepted`;
 - writes `reports/model_suggestions.csv` so the review app can show model prediction, confidence, and decision reason.
 
 When you trust the threshold enough, add `--promote-auto` to copy very confident predictions straight into `reviewed/<class_name>/`:
@@ -53,6 +54,19 @@ reviewed/<11 class>/           # trusted labels used for training
 reviewed_extra/<custom label>/ # useful, outside the current 11-class problem
 manual_rejected/<pool>/        # bad or irrelevant images
 reports/*.csv|*.json           # manifests, logs, model suggestions
+```
+
+Duplicate policy:
+
+- import/preprocess removes obvious duplicates early;
+- model-assisted filtering runs a second duplicate gate against seed/reviewed images and previous candidates;
+- duplicate images are copied to `model_assisted/model_rejected/duplicate_seed` or `model_assisted/model_rejected/duplicate_candidate`;
+- source files are not deleted.
+
+Tune the pHash threshold if needed:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\16_model_assisted_filter.py --skip-train --apply --duplicate-hamming 10
 ```
 
 ## Environment
@@ -292,6 +306,7 @@ Default inputs:
 Important thresholds:
 
 ```powershell
+--duplicate-hamming 8
 --auto-accept-confidence 0.92
 --review-confidence 0.55
 --reject-confidence 0.25
