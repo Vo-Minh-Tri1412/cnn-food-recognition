@@ -149,6 +149,14 @@ If public Kaggle datasets are not useful enough, collect web image candidates in
 
 The crawler writes `data/scraped_manifest.csv` with class, query, source URL, local path, provider, and download time. It also appends negative terms such as `-logo`, `-icon`, and `-emoji` unless `--raw-query` is used.
 
+When adding a new scrape batch after a merged baseline already exists, seed duplicate checks from that baseline:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\09_collect_web_images.py --class-name com_trang --out data\downloads\scrape_batches\NEW_BATCH\raw --manifest data\downloads\scrape_batches\NEW_BATCH\manifest.csv --dedupe-against data\downloads\merge_batches\MERGE_BATCH\processed
+```
+
+This skips exact URL repeats and near-duplicate image hashes inside the new batch, while the later preprocess/merge step still performs the stronger final dedupe.
+
 The default provider is DuckDuckGo image search. Bing is available as a fallback:
 
 ```powershell

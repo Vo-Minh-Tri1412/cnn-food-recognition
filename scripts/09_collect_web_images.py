@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import re
 import sys
 import time
@@ -16,9 +17,16 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import requests
 from ddgs import DDGS
-from PIL import Image
+from PIL import Image, ImageOps
 
-from canteen_checkout.config import DISH_CLASSES, PROJECT_ROOT, SCRAPED_CANDIDATES_DIR, SCRAPED_MANIFEST_CSV
+from canteen_checkout.config import (
+    DISH_CLASSES,
+    IMAGE_EXTENSIONS,
+    PROJECT_ROOT,
+    SCRAPED_CANDIDATES_DIR,
+    SCRAPED_MANIFEST_CSV,
+)
+from canteen_checkout.data_quality import hamming_distance_hex, perceptual_hash
 
 
 HEADERS = {
@@ -89,6 +97,33 @@ def existing_short_digests(out_dir: Path) -> set[str]:
     return digests
 
 
+def list_class_images(root: Path, class_name: str) -> list[Path]:
+    class_dir = root / class_name
+    search_root = class_dir if class_dir.exists() else root
+    if not search_root.exists():
+        return []
+    return sorted(p for p in search_root.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+
+
+def existing_phashes(*, out_dir: Path, against_roots: list[Path], class_name: str) -> list[str]:
+    phashes: list[str] = []
+    paths = sorted(p for p in out_dir.glob("*.*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+    for root in against_roots:
+        paths.extend(list_class_images(root, class_name))
+    for path in paths:
+        try:
+            with Image.open(path) as image:
+                image = ImageOps.exif_transpose(image).convert("RGB")
+                phashes.append(perceptual_hash(image))
+        except Exception:
+            continue
+    return phashes
+
+
+def is_near_phash(phash: str, seen_phashes: list[str], threshold: int) -> bool:
+    return any(hamming_distance_hex(phash, seen) <= threshold for seen in seen_phashes)
+
+
 def find_bing_image_urls(query: str, max_urls: int) -> list[str]:
     url = f"https://www.bing.com/images/search?q={quote_plus(query)}&form=HDRSC2&first=1"
     response = requests.get(url, headers=HEADERS, timeout=20)
@@ -145,12 +180,38 @@ def validate_image(path: Path, min_size: int) -> bool:
         return False
 
 
-def download_url(url: str, out_dir: Path, prefix: str, min_size: int, seen_digests: set[str]) -> Path | None:
+def decode_response_image(content: bytes, min_size: int) -> tuple[Image.Image, str] | None:
+    try:
+        with Image.open(io.BytesIO(content)) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            w, h = image.size
+            if w < min_size or h < min_size:
+                return None
+            return image, perceptual_hash(image)
+    except Exception:
+        return None
+
+
+def download_url(
+    url: str,
+    out_dir: Path,
+    prefix: str,
+    min_size: int,
+    seen_digests: set[str],
+    seen_phashes: list[str],
+    phash_threshold: int,
+) -> Path | None:
     try:
         response = requests.get(url, headers=HEADERS, timeout=25)
         response.raise_for_status()
         digest = hashlib.sha256(response.content).hexdigest()[:16]
         if digest in seen_digests:
+            return None
+        decoded = decode_response_image(response.content, min_size)
+        if decoded is None:
+            return None
+        _, phash = decoded
+        if is_near_phash(phash, seen_phashes, phash_threshold):
             return None
         suffix = safe_suffix(response.headers.get("content-type", ""), url)
         out_path = out_dir / f"{prefix}_{digest}{suffix}"
@@ -158,10 +219,8 @@ def download_url(url: str, out_dir: Path, prefix: str, min_size: int, seen_diges
             seen_digests.add(digest)
             return None
         out_path.write_bytes(response.content)
-        if not validate_image(out_path, min_size):
-            out_path.unlink(missing_ok=True)
-            return None
         seen_digests.add(digest)
+        seen_phashes.append(phash)
         return out_path
     except Exception:
         return None
@@ -180,6 +239,14 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, default=SCRAPED_MANIFEST_CSV)
     parser.add_argument("--strict-phrase", action="store_true", help="Quote each query phrase before adding negative terms.")
     parser.add_argument("--raw-query", action="store_true", help="Do not append negative terms to search queries.")
+    parser.add_argument(
+        "--dedupe-against",
+        type=Path,
+        action="append",
+        default=[],
+        help="Seed perceptual duplicate checks from one or more existing dataset roots.",
+    )
+    parser.add_argument("--phash-threshold", type=int, default=4)
     args = parser.parse_args()
 
     queries = read_queries(args.queries)
@@ -188,6 +255,7 @@ def main() -> None:
 
     counts: dict[str, int] = {}
     digest_cache: dict[str, set[str]] = {}
+    phash_cache: dict[str, list[str]] = {}
     seen_urls: dict[str, set[str]] = {}
     args.out.mkdir(parents=True, exist_ok=True)
     for class_name, query in queries:
@@ -196,6 +264,10 @@ def main() -> None:
         class_dir.mkdir(parents=True, exist_ok=True)
         counts.setdefault(class_name, len(list(class_dir.glob("*.*"))))
         digest_cache.setdefault(class_name, existing_short_digests(class_dir))
+        phash_cache.setdefault(
+            class_name,
+            existing_phashes(out_dir=class_dir, against_roots=args.dedupe_against, class_name=class_name),
+        )
         seen_urls.setdefault(class_name, set())
         if counts[class_name] >= args.max_downloads_per_class:
             continue
@@ -229,7 +301,15 @@ def main() -> None:
             if url in seen_urls[class_name]:
                 continue
             seen_urls[class_name].add(url)
-            out_path = download_url(url, class_dir, f"{class_name}_{idx:03d}", args.min_size, digest_cache[class_name])
+            out_path = download_url(
+                url,
+                class_dir,
+                f"{class_name}_{idx:03d}",
+                args.min_size,
+                digest_cache[class_name],
+                phash_cache[class_name],
+                args.phash_threshold,
+            )
             if out_path:
                 counts[class_name] += 1
                 append_manifest_row(
