@@ -308,6 +308,7 @@ class ReviewStore:
         reviewed_counts = count_images_by_folder(self.staging_root / "reviewed")
         extra_counts = count_images_by_folder(self.staging_root / "reviewed_extra")
         rejected_counts = count_images_by_folder(self.staging_root / "manual_rejected")
+        skipped_counts = count_images_by_folder(self.staging_root / "manual_skipped")
         return {
             "total": len(self.items),
             "done": len(state),
@@ -319,9 +320,11 @@ class ReviewStore:
                 "reviewed_total": sum(reviewed_counts.values()),
                 "extra_total": sum(extra_counts.values()),
                 "rejected_total": sum(rejected_counts.values()),
+                "skipped_total": sum(skipped_counts.values()),
                 "reviewed_by_class": reviewed_counts,
                 "extra_by_label": extra_counts,
                 "rejected_by_pool": rejected_counts,
+                "skipped_by_pool": skipped_counts,
             },
         }
 
@@ -408,17 +411,22 @@ class ReviewStore:
         if action == "label":
             target_dir = self.staging_root / "reviewed" / class_name
             target = unique_destination(target_dir, f"{item.pool}_{item.filename}")
-            shutil.copy2(item.path, target)
+            shutil.move(str(item.path), str(target))
             output = relative_or_absolute(target)
         elif action == "label_extra":
             target_dir = self.staging_root / "reviewed_extra" / class_name
             target = unique_destination(target_dir, f"{item.pool}_{item.filename}")
-            shutil.copy2(item.path, target)
+            shutil.move(str(item.path), str(target))
             output = relative_or_absolute(target)
         elif action == "reject":
             target_dir = self.staging_root / "manual_rejected" / item.pool
             target = unique_destination(target_dir, item.filename)
-            shutil.copy2(item.path, target)
+            shutil.move(str(item.path), str(target))
+            output = relative_or_absolute(target)
+        elif action == "skip":
+            target_dir = self.staging_root / "manual_skipped" / item.pool
+            target = unique_destination(target_dir, item.filename)
+            shutil.move(str(item.path), str(target))
             output = relative_or_absolute(target)
 
         append_action(
@@ -464,8 +472,14 @@ class ReviewStore:
         output_path = current.get("output_path") or ""
         if output_path:
             path = PROJECT_ROOT / output_path if not Path(output_path).is_absolute() else Path(output_path)
+            source_path = current.get("source_path") or ""
+            source = PROJECT_ROOT / source_path if source_path and not Path(source_path).is_absolute() else Path(source_path)
             if is_inside(path, self.staging_root) and path.exists():
-                path.unlink()
+                source.parent.mkdir(parents=True, exist_ok=True)
+                if not source.exists() and is_inside(source, self.staging_root):
+                    shutil.move(str(path), str(source))
+                else:
+                    path.unlink()
         append_action(
             self.action_log,
             {
