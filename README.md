@@ -214,6 +214,14 @@ reports/review_instructions.txt
 
 Ambiguous pools such as `thit_kho_or_thit_kho_trung`, `canh_chua_unknown`, `protein_grid_review`, and `unknown_food_crops` must be manually copied into the right `reviewed/<class_name>/` folder before promotion.
 
+For faster local review, launch the browser UI:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\15_review_external_dataset.py --staging data\downloads\external_staging\external_20260609_115250 --port 7860
+```
+
+The app copies accepted images into `reviewed/<class_name>/`, copies rejects into `manual_rejected/`, and logs every action to `reports/review_actions.csv`.
+
 ## Clean Workspace Artifacts
 
 Archive smoke-test outputs and old demo artifacts without touching source data:
