@@ -36,6 +36,7 @@ def main() -> None:
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--regions-json", type=Path, default=None)
     parser.add_argument("--threshold", type=float, default=0.45)
+    parser.add_argument("--ignore-region", action="append", default=[], help="Region name to crop but exclude from billing. Can be repeated.")
     parser.add_argument("--egg-count", type=int, default=1, help="Egg count to charge for thit_kho_trung predictions.")
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args()
@@ -54,6 +55,7 @@ def main() -> None:
         h, w = image.shape[:2]
         regions = five_compartment_template(w, h)
 
+    ignored_regions = set(args.ignore_region)
     crop_paths = crop_regions(image_path, regions, out_dir)
     prices = load_prices()
 
@@ -69,8 +71,18 @@ def main() -> None:
 
     items = []
     total = 0
-    for crop_path in crop_paths:
-        if model is not None:
+    for crop_path, region in zip(crop_paths, regions):
+        forced_label = region.label or ""
+        ignored = region.name in ignored_regions or forced_label in {"ignore", "ignored", "unknown", "other", "extra"}
+        if ignored:
+            class_name = forced_label or "ignored"
+            confidence = 1.0
+            uncertain = True
+        elif forced_label:
+            class_name = forced_label
+            confidence = 1.0
+            uncertain = False
+        elif model is not None:
             class_name, confidence = predict_crop(model, class_names, image_size, crop_path, device)
             uncertain = confidence < args.threshold
         else:
@@ -91,10 +103,12 @@ def main() -> None:
         items.append(
             {
                 "crop_path": str(crop_path),
+                "region_name": region.name,
                 "class_name": class_name,
                 "display_name": display_name,
                 "confidence": round(confidence, 4),
                 "uncertain": uncertain,
+                "ignored": ignored,
                 "base_price_vnd": price_info.base_price_vnd,
                 "extra_price_vnd": price_info.extra_price_vnd,
                 "egg_count": price_info.egg_count,
@@ -116,7 +130,7 @@ def main() -> None:
 
     print("Detected dishes:")
     for idx, item in enumerate(items, 1):
-        marker = " (uncertain)" if item["uncertain"] else ""
+        marker = " (ignored)" if item["ignored"] else " (uncertain)" if item["uncertain"] else ""
         egg_note = f", eggs={item['egg_count']}" if item["egg_count"] is not None else ""
         print(
             f"{idx}. {item['display_name']} - {item['price_vnd']:,} VND "

@@ -439,6 +439,14 @@ For `thit_kho_trung`, the base price includes one egg. Extra eggs add 6,000 VND 
 .\.venv\Scripts\python.exe scripts\06_demo_checkout.py --image data\demo_trays\YOUR_IMAGE.jpg --egg-count 2
 ```
 
+For trays that include cucumber, sauce, or extra foods outside the 11-class price table, use a regions JSON and mark non-billable cells as `ignore`:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\06_demo_checkout.py --image data\demo_trays\YOUR_IMAGE.jpg --regions-json configs\square_tray_demo_regions.example.json --threshold 0.55
+```
+
+The demo will still save crops, but ignored regions are charged `0` and are not treated as classifier mistakes.
+
 Notebook equivalent:
 
 ```text
