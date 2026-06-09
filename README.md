@@ -433,6 +433,14 @@ After real training:
 .\.venv\Scripts\python.exe scripts\06_demo_checkout.py --image data\demo_trays\YOUR_IMAGE.jpg
 ```
 
+For a local web UI:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\19_demo_checkout_app.py
+```
+
+Open `http://127.0.0.1:7861`, upload or choose a tray image, adjust crop regions, set labels such as `ignore`, and run checkout from the browser.
+
 For `thit_kho_trung`, the base price includes one egg. Extra eggs add 6,000 VND each:
 
 ```powershell
