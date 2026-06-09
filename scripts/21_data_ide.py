@@ -450,9 +450,11 @@ HTML = r"""<!doctype html>
     .group h2{margin:0 0 10px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
     label{display:block;color:var(--muted);font-size:12px;margin:8px 0 4px} select,input,button{width:100%;height:34px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:0 8px;font:inherit}
     button{cursor:pointer;font-weight:650}.primary{background:var(--accent);border-color:var(--accent);color:#fff}.danger{color:var(--danger)}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat{background:#f3f5f7;border-radius:6px;padding:8px}
-    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}.card{border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden}
-    .card.selected{outline:3px solid var(--accent)}.card img{width:100%;aspect-ratio:1/1;object-fit:cover;background:#eef1f4}.card .body{padding:8px}.small{font-size:12px;color:var(--muted);word-break:break-word}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.row.three{grid-template-columns:repeat(3,1fr)}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat{background:#f3f5f7;border-radius:6px;padding:8px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}.card{position:relative;border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden}
+    .card.selected{outline:3px solid var(--accent)}.card.active-row{box-shadow:0 0 0 2px #9fd8cc;border-color:#63b8a8}.card img{width:100%;aspect-ratio:1/1;object-fit:cover;background:#eef1f4}.card .body{padding:8px}.small{font-size:12px;color:var(--muted);word-break:break-word}
+    .keycap{position:absolute;top:6px;left:6px;min-width:24px;height:24px;border-radius:999px;background:#1b222a;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;box-shadow:0 2px 8px #0003}.keycap.muted{background:#ffffffde;color:#687382;border:1px solid var(--line)}
+    .queuebar{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center}.queuebar button{width:auto}.shortcut{margin-top:8px;padding:8px;border:1px dashed var(--line);border-radius:6px;background:#fafbfc;color:var(--muted)}
     .pill{display:inline-block;padding:2px 6px;border-radius:999px;background:#eef1f4;font-size:12px;margin:2px}.bad{background:#fee4e2;color:#912018}.warn{background:#fff2cc;color:#7a4a00}.ok{background:#dcfae6;color:#05603a}
     table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left}
   </style>
@@ -481,23 +483,53 @@ HTML = r"""<!doctype html>
     <div class="group"><h2>Counts</h2><div id="counts" class="small"></div></div>
   </aside>
   <main class="main">
-    <div class="group"><h2>Ảnh</h2><div class="row"><button id="selectAllBtn">Select visible</button><button id="clearBtn">Clear</button></div></div>
+    <div class="group"><h2>Ảnh</h2>
+      <div class="queuebar"><div id="queueStatus" class="small">Row 0/0 · selected 0</div><button id="prevRowBtn">Prev row</button><button id="nextRowBtn">Next row</button></div>
+      <div class="row three"><button id="selectRowBtn">Select row</button><button id="selectAllBtn">Select visible</button><button id="clearBtn">Clear</button></div>
+      <div class="shortcut small">1-0 chọn ảnh trong hàng hiện tại · A chọn cả hàng · Space xuống hàng · Shift+Space lên hàng · Enter move · Q quarantine · F future use · P predict · Esc clear</div>
+    </div>
     <div id="grid" class="grid"></div>
   </main>
 </div>
 <script>
-const $=id=>document.getElementById(id); const state={items:[], selected:new Set(), preds:{}};
+const $=id=>document.getElementById(id);
+const state={items:[],selected:new Set(),preds:{},classes:[],cursorRow:0,lastTotal:0};
 function status(t){$('status').textContent=t}
+function esc(v){return String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 async function api(url,body=null){const opt=body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{};const r=await fetch(url,opt);const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||r.statusText);return d}
-function clsOptions(){return [''].concat(state.classes||[]).map(c=>`<option value="${c}">${c||'all'}</option>`).join('')}
-async function init(){const s=await api('/api/state');state.classes=s.classes;$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${r.path}">${r.name}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetClass').innerHTML=(state.classes||[]).map(c=>`<option>${c}</option>`).join('');await load()}
-async function load(){state.selected.clear();const q=new URLSearchParams({root:$('rootSelect').value,split:$('splitSelect').value,class_name:$('classFilter').value,page_size:'120'});const d=await api('/api/browse?'+q);state.items=d.items;renderCounts(d.counts);renderGrid();status(`${d.total} files`)}
-function renderCounts(c){$('counts').innerHTML=`<div class=stats><div class=stat>Total<br><b>${c.total}</b></div><div class=stat>Classes<br><b>${Object.keys(c.classes).length}</b></div><div class=stat>Sources<br><b>${Object.keys(c.sources).join(', ')}</b></div></div><pre>${JSON.stringify(c.classes,null,2)}</pre>`}
-function renderGrid(){$('grid').innerHTML=state.items.map(it=>{const p=state.preds[it.id];const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${p.decision}</span>`:'';return `<div class="card ${state.selected.has(it.id)?'selected':''}" data-id="${it.id}"><img src="${it.image_url}"><div class=body><b>${it.class_name}</b> <span class=pill>${it.split||'root'}</span> ${dec}<div class=small>${it.filename}</div><div class=small>${it.source} · blur ${it.blur_score}</div>${p?`<div class=small>top1 ${p.top1} ${p.top1_confidence}<br>top2 ${p.top2} ${p.top2_confidence}</div><div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`}).join('');document.querySelectorAll('.card').forEach(card=>{card.onclick=e=>{if(e.target.dataset.fb){feedback(card.dataset.id,e.target.dataset.fb);return}state.selected.has(card.dataset.id)?state.selected.delete(card.dataset.id):state.selected.add(card.dataset.id);renderGrid()}})}
-async function act(action, extra={}){const ids=[...state.selected];if(!ids.length){alert('Chưa chọn ảnh');return}for(const id of ids){await api('/api/action',{action,item_id:id,...extra})}await load()}
-async function predict(){const ids=state.items.map(x=>x.id);const d=await api('/api/predict',{item_ids:ids,threshold:Number($('threshold').value)});state.preds={};for(const p of d.predictions)state.preds[p.id]=p;const counts={};for(const p of d.predictions)counts[p.decision]=(counts[p.decision]||0)+1;$('modelStats').textContent=JSON.stringify(counts);renderGrid()}
+function clsOptions(){return [''].concat(state.classes||[]).map(c=>`<option value="${esc(c)}">${esc(c||'all')}</option>`).join('')}
+function isTypingTarget(target){return ['INPUT','SELECT','TEXTAREA'].includes(target?.tagName)||target?.isContentEditable}
+function columnsPerRow(){const grid=$('grid');const width=grid?.clientWidth||window.innerWidth;return Math.max(1,Math.min(10,Math.floor((width+10)/170)))}
+function totalRows(){return state.items.length?Math.ceil(state.items.length/columnsPerRow()):0}
+function clampRow(){const rows=totalRows();state.cursorRow=rows?Math.max(0,Math.min(state.cursorRow,rows-1)):0}
+function rowBounds(row=state.cursorRow){const cols=columnsPerRow();const start=row*cols;return [start,Math.min(start+cols,state.items.length)]}
+function updateQueueStatus(){const rows=totalRows();$('queueStatus').textContent=`Row ${rows?state.cursorRow+1:0}/${rows} · selected ${state.selected.size} · visible ${state.items.length}/${state.lastTotal}`}
+function scrollToRow(behavior='smooth'){const [start]=rowBounds();const card=document.querySelector(`.card[data-index="${start}"]`);if(card)card.scrollIntoView({block:'center',behavior})}
+function setRow(row,behavior='smooth'){state.cursorRow=row;clampRow();renderGrid();scrollToRow(behavior)}
+function toggleAt(index){const it=state.items[index];if(!it)return;state.selected.has(it.id)?state.selected.delete(it.id):state.selected.add(it.id);renderGrid()}
+function selectCurrentRow(){const [start,end]=rowBounds();for(let i=start;i<end;i++)state.selected.add(state.items[i].id);renderGrid()}
+async function init(){const s=await api('/api/state');state.classes=s.classes;$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetClass').innerHTML=(state.classes||[]).map(c=>`<option>${esc(c)}</option>`).join('');await load({keepRow:false})}
+async function load(opts={}){const nextRow=opts.keepRow?state.cursorRow:0;state.selected.clear();state.preds={};const q=new URLSearchParams({root:$('rootSelect').value,split:$('splitSelect').value,class_name:$('classFilter').value,page_size:'120'});const d=await api('/api/browse?'+q);state.items=d.items;state.lastTotal=d.total;state.cursorRow=nextRow;clampRow();renderCounts(d.counts);renderGrid();status(`${d.total} files · queue refreshed`);scrollToRow('auto')}
+function renderCounts(c){$('counts').innerHTML=`<div class=stats><div class=stat>Total<br><b>${c.total}</b></div><div class=stat>Classes<br><b>${Object.keys(c.classes).length}</b></div><div class=stat>Sources<br><b>${esc(Object.keys(c.sources).join(', '))}</b></div></div><pre>${esc(JSON.stringify(c.classes,null,2))}</pre>`}
+function renderGrid(){const cols=columnsPerRow();$('grid').innerHTML=state.items.map((it,idx)=>{const p=state.preds[it.id];const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';const row=Math.floor(idx/cols);const keyIndex=idx%cols;const key=keyIndex===9?'0':String(keyIndex+1);const active=row===state.cursorRow;return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)} · blur ${esc(it.blur_score)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div><div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`}).join('');document.querySelectorAll('.card').forEach(card=>{card.onclick=e=>{if(e.target.dataset.fb){feedback(card.dataset.id,e.target.dataset.fb);return}state.cursorRow=Math.floor(Number(card.dataset.index)/columnsPerRow());state.selected.has(card.dataset.id)?state.selected.delete(card.dataset.id):state.selected.add(card.dataset.id);renderGrid()}});updateQueueStatus()}
+async function act(action,extra={}){const ids=[...state.selected];if(!ids.length){alert('Chưa chọn ảnh');return}status(`Đang xử lý ${ids.length} ảnh...`);let ok=0;for(const id of ids){await api('/api/action',{action,item_id:id,...extra});ok++}await load({keepRow:true});status(`Đã xử lý ${ok} ảnh; đã nạp ảnh tiếp theo`)}
+async function predict(){const ids=state.items.map(x=>x.id);if(!ids.length)return;status(`Predict ${ids.length} ảnh visible...`);const d=await api('/api/predict',{item_ids:ids,threshold:Number($('threshold').value)});state.preds={};for(const p of d.predictions)state.preds[p.id]=p;const counts={};for(const p of d.predictions)counts[p.decision]=(counts[p.decision]||0)+1;$('modelStats').textContent=JSON.stringify(counts);renderGrid();status('Predict xong')}
 async function feedback(id,val){const it=state.items.find(x=>x.id===id),p=state.preds[id]||{};await api('/api/feedback',{timestamp:new Date().toISOString(),item_id:id,current_class:it.class_name,model_top1:p.top1||'',is_correct:val,correct_class:val==='yes'?p.top1:'',note:''});status('Saved feedback')}
-$('loadBtn').onclick=load;$('undoBtn').onclick=async()=>{await api('/api/undo',{});await load()};$('moveBtn').onclick=()=>act('move_class',{class_name:$('targetClass').value});$('bulkMoveBtn').onclick=$('moveBtn').onclick;$('quarantineBtn').onclick=()=>act('quarantine',{label:$('quarantineLabel').value});$('futureUseBtn').onclick=()=>act('quarantine',{label:'future_use_'+$('quarantineLabel').value});$('predictBtn').onclick=predict;$('selectAllBtn').onclick=()=>{state.items.forEach(x=>state.selected.add(x.id));renderGrid()};$('clearBtn').onclick=()=>{state.selected.clear();renderGrid()};init().catch(e=>{status(e.message);alert(e.message)});
+$('loadBtn').onclick=()=>load({keepRow:false});
+$('undoBtn').onclick=async()=>{await api('/api/undo',{});await load({keepRow:true})};
+$('moveBtn').onclick=()=>act('move_class',{class_name:$('targetClass').value});
+$('bulkMoveBtn').onclick=$('moveBtn').onclick;
+$('quarantineBtn').onclick=()=>act('quarantine',{label:$('quarantineLabel').value});
+$('futureUseBtn').onclick=()=>act('quarantine',{label:'future_use_'+$('quarantineLabel').value});
+$('predictBtn').onclick=predict;
+$('selectRowBtn').onclick=selectCurrentRow;
+$('selectAllBtn').onclick=()=>{state.items.forEach(x=>state.selected.add(x.id));renderGrid()};
+$('clearBtn').onclick=()=>{state.selected.clear();renderGrid()};
+$('prevRowBtn').onclick=()=>setRow(state.cursorRow-1);
+$('nextRowBtn').onclick=()=>setRow(state.cursorRow+1);
+document.addEventListener('keydown',e=>{if(isTypingTarget(e.target)||e.ctrlKey||e.metaKey||e.altKey)return;const key=e.key.toLowerCase();if(/^[1-9]$/.test(e.key)){e.preventDefault();const [start]=rowBounds();toggleAt(start+Number(e.key)-1);return}if(e.key==='0'){e.preventDefault();const [start]=rowBounds();toggleAt(start+9);return}if(e.code==='Space'){e.preventDefault();setRow(state.cursorRow+(e.shiftKey?-1:1));return}if(e.key==='ArrowDown'){e.preventDefault();setRow(state.cursorRow+1);return}if(e.key==='ArrowUp'){e.preventDefault();setRow(state.cursorRow-1);return}if(e.key==='Enter'){e.preventDefault();$('moveBtn').click();return}if(key==='q'){e.preventDefault();$('quarantineBtn').click();return}if(key==='f'){e.preventDefault();$('futureUseBtn').click();return}if(key==='p'){e.preventDefault();predict();return}if(key==='a'){e.preventDefault();selectCurrentRow();return}if(e.key==='Escape'){state.selected.clear();renderGrid();return}});
+let resizeTimer=null;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{clampRow();renderGrid();scrollToRow('auto')},120)});
+init().catch(e=>{status(e.message);alert(e.message)});
 </script>
 </body></html>"""
 
