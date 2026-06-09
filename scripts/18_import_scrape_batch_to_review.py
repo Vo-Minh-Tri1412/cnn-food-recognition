@@ -136,11 +136,12 @@ def manifest_row(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Preprocess a scrape batch into an external staging review pool.")
+    parser = argparse.ArgumentParser(description="Preprocess a scrape batch into an external staging review/reviewed pool.")
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--staging", type=Path, default=None)
     parser.add_argument("--class-name", choices=DISH_CLASSES, default="rau_xao")
     parser.add_argument("--pool", default="rau_xao_extra_scrape")
+    parser.add_argument("--target", choices=["review", "reviewed"], default="review")
     parser.add_argument("--source-name", default=None)
     parser.add_argument("--image-size", type=int, default=512)
     parser.add_argument("--mode", choices=["pad", "crop"], default="pad")
@@ -156,12 +157,12 @@ def main() -> None:
 
     staging = args.staging or latest_external_staging()
     source_name = args.source_name or args.source.name
-    out_dir = staging / "review" / args.pool
+    out_dir = staging / "reviewed" / args.class_name if args.target == "reviewed" else staging / "review" / args.pool
     rejected_dir = staging / "rejected" / "scrape_batch" / args.pool
     manifest_path = staging / "reports" / "external_import_manifest.csv"
 
     reference_roots = list(args.dedupe_against)
-    reference_roots.extend([staging / "reviewed", staging / "review" / args.pool])
+    reference_roots.extend([staging / "reviewed", staging / "review" / args.pool, out_dir])
     seen_phashes = load_reference_phashes(reference_roots)
     rows: list[dict[str, str]] = []
     counts: Counter = Counter()
@@ -228,6 +229,7 @@ def main() -> None:
         "source": relative_or_absolute(args.source),
         "staging": relative_or_absolute(staging),
         "pool": args.pool,
+        "target": args.target,
         "class_name": args.class_name,
         "counts": dict(counts),
     }
