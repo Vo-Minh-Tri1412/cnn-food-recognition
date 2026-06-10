@@ -38,6 +38,8 @@ ACTION_FIELDS = [
 
 MODEL_CACHE: dict[str, object] = {}
 METRIC_CACHE: dict[str, tuple[float, int, object]] = {}
+PATH_CACHE: dict[tuple[str, str], list[tuple[Path, str, str]]] = {}
+COUNT_CACHE: dict[str, dict[str, object]] = {}
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,11 @@ def safe_label(value: str) -> str:
     return value or "future_use"
 
 
+def invalidate_data_cache() -> None:
+    PATH_CACHE.clear()
+    COUNT_CACHE.clear()
+
+
 def unique_destination(folder: Path, filename: str) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / filename
@@ -172,6 +179,16 @@ def list_labeled_paths(root: Path, split: str = "", class_name: str = "", folder
     if not root.exists():
         return paths
     mode = root_mode(root)
+    cache_key = (str(root.resolve()), folder if mode == "folder" else "")
+    cached = PATH_CACHE.get(cache_key)
+    if cached is not None:
+        if mode == "classification":
+            return [
+                (path, item_split, item_class)
+                for path, item_split, item_class in cached
+                if (not split or item_split == split) and (not class_name or item_class == class_name)
+            ]
+        return list(cached)
     if mode == "folder" and folder:
         search_root = (root / folder).resolve()
         if not is_inside(search_root, root) or not search_root.exists():
@@ -189,21 +206,26 @@ def list_labeled_paths(root: Path, split: str = "", class_name: str = "", folder
         if mode == "classification" and class_name and item_class != class_name:
             continue
         paths.append((path, item_split, item_class))
+    if mode == "classification":
+        if not split and not class_name:
+            PATH_CACHE[cache_key] = list(paths)
+    else:
+        PATH_CACHE[cache_key] = list(paths)
     return paths
 
 
-def make_item(path: Path, item_split: str, item_class: str) -> DataItem:
-    metrics = cached_assess_metrics(path)
-    if metrics is None:
-        sha256 = ""
-        phash = ""
-        blur_score = 0.0
-        brightness = 0.0
-    else:
-        sha256 = metrics.sha256
-        phash = metrics.phash
-        blur_score = metrics.blur_score
-        brightness = metrics.brightness
+def make_item(path: Path, item_split: str, item_class: str, include_metrics: bool = False) -> DataItem:
+    sha256 = ""
+    phash = ""
+    blur_score = 0.0
+    brightness = 0.0
+    if include_metrics:
+        metrics = cached_assess_metrics(path)
+        if metrics is not None:
+            sha256 = metrics.sha256
+            phash = metrics.phash
+            blur_score = metrics.blur_score
+            brightness = metrics.brightness
     return DataItem(
         item_id=stable_item_id(path),
         path=path,
@@ -219,14 +241,18 @@ def make_item(path: Path, item_split: str, item_class: str) -> DataItem:
     )
 
 
-def list_items(root: Path, split: str = "", class_name: str = "", folder: str = "") -> list[DataItem]:
+def list_items(root: Path, split: str = "", class_name: str = "", folder: str = "", include_metrics: bool = False) -> list[DataItem]:
     items: list[DataItem] = []
     for path, item_split, item_class in list_labeled_paths(root, split, class_name, folder):
-        items.append(make_item(path, item_split, item_class))
+        items.append(make_item(path, item_split, item_class, include_metrics))
     return items
 
 
 def count_tree(root: Path) -> dict[str, object]:
+    cache_key = str(root.resolve())
+    cached = COUNT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     result: dict[str, object] = {"total": 0, "splits": {}, "classes": {}, "folders": {}, "sources": {}}
     for path, item_split, item_class in list_labeled_paths(root):
         result["total"] = int(result["total"]) + 1
@@ -241,6 +267,7 @@ def count_tree(root: Path) -> dict[str, object]:
         source = source_from_name(path)
         result["sources"].setdefault(source, 0)
         result["sources"][source] += 1
+    COUNT_CACHE[cache_key] = result
     return result
 
 
@@ -409,6 +436,7 @@ class DataIDE:
             target_dir = item.path.parent.parent / class_name
         target = unique_destination(target_dir, item.filename)
         shutil.move(str(item.path), str(target))
+        invalidate_data_cache()
         append_action(
             action_log(),
             {
@@ -430,6 +458,7 @@ class DataIDE:
         target_dir = PROJECT_ROOT / "data" / "quarantine" / label / item.class_name
         target = unique_destination(target_dir, item.filename)
         shutil.move(str(item.path), str(target))
+        invalidate_data_cache()
         append_action(
             action_log(),
             {
@@ -455,6 +484,7 @@ class DataIDE:
             if output.exists() and not source.exists():
                 source.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(output), str(source))
+                invalidate_data_cache()
                 append_action(
                     action_log(),
                     {
@@ -572,12 +602,12 @@ function rowBounds(row=state.cursorRow){const cols=columnsPerRow();const start=r
 function updateQueueStatus(){const rows=totalRows();$('queueStatus').textContent=`Row ${rows?state.cursorRow+1:0}/${rows} · selected ${state.selected.size} · visible ${state.items.length}/${state.lastTotal}`}
 function scrollToRow(behavior='smooth'){const [start]=rowBounds();const card=document.querySelector(`.card[data-index="${start}"]`);if(card)card.scrollIntoView({block:'center',behavior})}
 function setRow(row,behavior='smooth'){state.cursorRow=row;clampRow();renderGrid();scrollToRow(behavior)}
-function toggleAt(index){const it=state.items[index];if(!it)return;state.selected.has(it.id)?state.selected.delete(it.id):state.selected.add(it.id);renderGrid()}
+function toggleRowKey(position){const [start,end]=rowBounds();const index=start+position;if(index>=end)return;const it=state.items[index];if(!it)return;state.selected.has(it.id)?state.selected.delete(it.id):state.selected.add(it.id);renderGrid()}
 function selectCurrentRow(){const [start,end]=rowBounds();for(let i=start;i<end;i++)state.selected.add(state.items[i].id);renderGrid()}
 async function init(){const s=await api('/api/state');state.classes=s.classes;state.roots=s.roots;$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.mode)}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetClass').innerHTML=(state.classes||[]).map(c=>`<option>${esc(c)}</option>`).join('');state.initialized=true;await rootChanged()}
 async function load(opts={}){const seq=++state.loadSeq;const nextRow=opts.keepRow?state.cursorRow:0;state.selected.clear();state.preds={};const rootValue=$('rootSelect').value;status('Loading files...');const q=new URLSearchParams({root:rootValue,page_size:'120'});if(state.rootMode==='classification'){q.set('split',$('splitSelect').value);q.set('class_name',$('classFilter').value)}else{q.set('folder',$('folderFilter').value)}const d=await api('/api/browse?'+q);if(seq!==state.loadSeq)return;state.rootMode=d.mode||state.rootMode;state.activeRoot=rootValue;state.filterKey=currentFilterKey();state.items=d.items;state.lastTotal=d.total;state.cursorRow=nextRow;clampRow();renderCounts(d.counts);renderGrid();status(`${d.total} files · queue refreshed`);scrollToRow('auto')}
 function renderCounts(c){const detail=state.rootMode==='classification'?c.classes:c.folders;const detailTitle=state.rootMode==='classification'?'Classes':'Folders';$('counts').innerHTML=`<div class=stats><div class=stat>Total<br><b>${c.total}</b></div><div class=stat>${detailTitle}<br><b>${Object.keys(detail||{}).length}</b></div><div class=stat>Sources<br><b>${esc(Object.keys(c.sources).join(', ')||'-')}</b></div></div><pre>${esc(JSON.stringify(detail||{},null,2))}</pre>`}
-function renderGrid(){const cols=columnsPerRow();$('grid').innerHTML=state.items.map((it,idx)=>{const p=state.preds[it.id];const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';const row=Math.floor(idx/cols);const keyIndex=idx%cols;const key=keyIndex===9?'0':String(keyIndex+1);const active=row===state.cursorRow;return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)} · blur ${esc(it.blur_score)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div><div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`}).join('');document.querySelectorAll('.card').forEach(card=>{card.onclick=e=>{if(e.target.dataset.fb){feedback(card.dataset.id,e.target.dataset.fb);return}state.cursorRow=Math.floor(Number(card.dataset.index)/columnsPerRow());state.selected.has(card.dataset.id)?state.selected.delete(card.dataset.id):state.selected.add(card.dataset.id);renderGrid()}});updateQueueStatus()}
+function renderGrid(){const cols=columnsPerRow();$('grid').innerHTML=state.items.map((it,idx)=>{const p=state.preds[it.id];const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';const row=Math.floor(idx/cols);const keyIndex=idx%cols;const key=keyIndex===9?'0':String(keyIndex+1);const active=row===state.cursorRow;return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div><div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`}).join('');document.querySelectorAll('.card').forEach(card=>{card.onclick=e=>{if(e.target.dataset.fb){feedback(card.dataset.id,e.target.dataset.fb);return}state.cursorRow=Math.floor(Number(card.dataset.index)/columnsPerRow());state.selected.has(card.dataset.id)?state.selected.delete(card.dataset.id):state.selected.add(card.dataset.id);renderGrid()}});updateQueueStatus()}
 async function act(action,extra={}){const ids=[...state.selected];if(!ids.length){alert('Chưa chọn ảnh');return}status(`Đang xử lý ${ids.length} ảnh...`);let ok=0;for(const id of ids){await api('/api/action',{action,item_id:id,...extra});ok++}await load({keepRow:true});status(`Đã xử lý ${ok} ảnh; đã nạp ảnh tiếp theo`)}
 async function predict(){const ids=state.items.map(x=>x.id);if(!ids.length)return;status(`Predict ${ids.length} ảnh visible...`);const d=await api('/api/predict',{item_ids:ids,threshold:Number($('threshold').value)});state.preds={};for(const p of d.predictions)state.preds[p.id]=p;const counts={};for(const p of d.predictions)counts[p.decision]=(counts[p.decision]||0)+1;$('modelStats').textContent=JSON.stringify(counts);renderGrid();status('Predict xong')}
 async function feedback(id,val){const it=state.items.find(x=>x.id===id),p=state.preds[id]||{};await api('/api/feedback',{timestamp:new Date().toISOString(),item_id:id,current_class:it.class_name,model_top1:p.top1||'',is_correct:val,correct_class:val==='yes'?p.top1:'',note:''});status('Saved feedback')}
@@ -599,7 +629,7 @@ $('selectAllBtn').onclick=()=>{state.items.forEach(x=>state.selected.add(x.id));
 $('clearBtn').onclick=()=>{state.selected.clear();renderGrid()};
 $('prevRowBtn').onclick=()=>setRow(state.cursorRow-1);
 $('nextRowBtn').onclick=()=>setRow(state.cursorRow+1);
-document.addEventListener('keydown',e=>{if(isTypingTarget(e.target)||e.ctrlKey||e.metaKey||e.altKey)return;const key=e.key.toLowerCase();if(/^[1-9]$/.test(e.key)){e.preventDefault();const [start]=rowBounds();toggleAt(start+Number(e.key)-1);return}if(e.key==='0'){e.preventDefault();const [start]=rowBounds();toggleAt(start+9);return}if(e.code==='Space'){e.preventDefault();setRow(state.cursorRow+(e.shiftKey?-1:1));return}if(e.key==='ArrowDown'){e.preventDefault();setRow(state.cursorRow+1);return}if(e.key==='ArrowUp'){e.preventDefault();setRow(state.cursorRow-1);return}if(e.key==='Enter'){e.preventDefault();$('moveBtn').click();return}if(key==='q'){e.preventDefault();$('quarantineBtn').click();return}if(key==='f'){e.preventDefault();$('futureUseBtn').click();return}if(key==='p'){e.preventDefault();predict();return}if(key==='a'){e.preventDefault();selectCurrentRow();return}if(e.key==='Escape'){state.selected.clear();renderGrid();return}});
+document.addEventListener('keydown',e=>{if(isTypingTarget(e.target)||e.ctrlKey||e.metaKey||e.altKey)return;const key=e.key.toLowerCase();if(/^[1-9]$/.test(e.key)){e.preventDefault();toggleRowKey(Number(e.key)-1);return}if(e.key==='0'){e.preventDefault();toggleRowKey(9);return}if(e.code==='Space'){e.preventDefault();setRow(state.cursorRow+(e.shiftKey?-1:1));return}if(e.key==='ArrowDown'){e.preventDefault();setRow(state.cursorRow+1);return}if(e.key==='ArrowUp'){e.preventDefault();setRow(state.cursorRow-1);return}if(e.key==='Enter'){e.preventDefault();$('moveBtn').click();return}if(key==='q'){e.preventDefault();$('quarantineBtn').click();return}if(key==='f'){e.preventDefault();$('futureUseBtn').click();return}if(key==='p'){e.preventDefault();predict();return}if(key==='a'){e.preventDefault();selectCurrentRow();return}if(e.key==='Escape'){state.selected.clear();renderGrid();return}});
 let resizeTimer=null;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{clampRow();renderGrid();scrollToRow('auto')},120)});
 setInterval(async()=>{if(!state.initialized||state.watchBusy)return;const key=currentFilterKey();if(key===state.filterKey)return;state.watchBusy=true;try{if($('rootSelect').value!==state.activeRoot)await syncRootFilters();await load({keepRow:false})}finally{state.watchBusy=false}},500);
 init().catch(e=>{status(e.message);alert(e.message)});
