@@ -36,6 +36,8 @@ ACTION_FIELDS = [
     "note",
 ]
 
+DONE_FIELDS = ["timestamp", "item_id", "path", "root", "folder", "class_name", "note"]
+
 MODEL_CACHE: dict[str, object] = {}
 METRIC_CACHE: dict[str, tuple[float, int, object]] = {}
 PATH_CACHE: dict[tuple[str, str], list[tuple[Path, str, str]]] = {}
@@ -292,6 +294,38 @@ def action_log() -> Path:
     return PROJECT_ROOT / "outputs" / "reports" / "data_ide_actions.csv"
 
 
+def done_log() -> Path:
+    return PROJECT_ROOT / "outputs" / "reports" / "data_ide_done.csv"
+
+
+def done_item_ids() -> set[str]:
+    path = done_log()
+    if not path.exists():
+        return set()
+    rows = read_rows(path)
+    done: set[str] = set()
+    for row in rows:
+        item_id = row.get("item_id", "")
+        if not item_id:
+            continue
+        if row.get("note") == "undo_done":
+            done.discard(item_id)
+        else:
+            done.add(item_id)
+    return done
+
+
+def append_done(row: dict[str, str]) -> None:
+    path = done_log()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    exists = path.exists()
+    with path.open("a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=DONE_FIELDS)
+        if not exists:
+            writer.writeheader()
+        writer.writerow({field: row.get(field, "") for field in DONE_FIELDS})
+
+
 def load_model_once(model_path: Path):
     key = str(model_path.resolve())
     cached = MODEL_CACHE.get(key)
@@ -361,7 +395,9 @@ class DataIDE:
 
     def browse(self, root_value: str, split: str = "", class_name: str = "", folder: str = "", page: int = 0, page_size: int = 80) -> dict[str, object]:
         root = resolve_project_path(root_value)
-        paths = list_labeled_paths(root, split, class_name, folder)
+        done_ids = done_item_ids()
+        raw_paths = list_labeled_paths(root, split, class_name, folder)
+        paths = [entry for entry in raw_paths if stable_item_id(entry[0]) not in done_ids]
         start = max(0, page * page_size)
         end = min(len(paths), start + page_size)
         items = [make_item(path, item_split, item_class) for path, item_split, item_class in paths[start:end]]
@@ -374,6 +410,7 @@ class DataIDE:
             "page": page,
             "page_size": page_size,
             "total": len(paths),
+            "hidden_done": len(raw_paths) - len(paths),
             "items": [self.serialize_item(item) for item in items],
         }
 
@@ -474,11 +511,67 @@ class DataIDE:
         )
         return {"ok": True, "output_path": relative_or_absolute(target)}
 
+    def mark_done(self, item_id: str, note: str = "kept_as_is") -> dict[str, object]:
+        item = self.item_from_id(item_id)
+        append_done(
+            {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "item_id": item.item_id,
+                "path": item.rel_path,
+                "root": "",
+                "folder": item.split,
+                "class_name": item.class_name,
+                "note": note,
+            }
+        )
+        append_action(
+            action_log(),
+            {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "item_id": item.item_id,
+                "source_path": item.rel_path,
+                "action": "mark_done",
+                "from_class": item.class_name,
+                "to_class": item.class_name,
+                "output_path": item.rel_path,
+                "note": note,
+            },
+        )
+        return {"ok": True, "done": True, "path": item.rel_path}
+
     def undo(self) -> dict[str, object]:
         rows = read_rows(action_log())
         for row in reversed(rows):
             if row.get("action") == "undo":
                 continue
+            if row.get("action") == "mark_done":
+                if row.get("item_id", "") not in done_item_ids():
+                    continue
+                append_done(
+                    {
+                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "item_id": row.get("item_id", ""),
+                        "path": row.get("source_path", ""),
+                        "root": "",
+                        "folder": "",
+                        "class_name": row.get("from_class", ""),
+                        "note": "undo_done",
+                    }
+                )
+                append_action(
+                    action_log(),
+                    {
+                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "item_id": row.get("item_id", ""),
+                        "source_path": row.get("source_path", ""),
+                        "action": "undo",
+                        "from_class": row.get("to_class", ""),
+                        "to_class": row.get("from_class", ""),
+                        "output_path": row.get("source_path", ""),
+                        "note": "undo_mark_done",
+                    },
+                )
+                return {"ok": True, "undone": True, "restored": row.get("source_path", ""), "type": "mark_done"}
             source = resolve_project_path(row.get("source_path", ""))
             output = resolve_project_path(row.get("output_path", ""))
             if output.exists() and not source.exists():
@@ -543,11 +636,14 @@ HTML = r"""<!doctype html>
     button{cursor:pointer;font-weight:650}.primary{background:var(--accent);border-color:var(--accent);color:#fff}.danger{color:var(--danger)}
     .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.row.three{grid-template-columns:repeat(3,1fr)}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat{background:#f3f5f7;border-radius:6px;padding:8px}
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}.card{position:relative;border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden}
-    .card.selected{outline:3px solid var(--accent)}.card.active-row{box-shadow:0 0 0 2px #9fd8cc;border-color:#63b8a8}.card img{width:100%;aspect-ratio:1/1;object-fit:cover;background:#eef1f4}.card .body{padding:8px}.small{font-size:12px;color:var(--muted);word-break:break-word}
+    .card.selected{outline:3px solid var(--accent)}.card.active-row{box-shadow:inset 0 0 0 3px var(--accent),0 0 12px rgba(18,106,90,.3);border-color:var(--accent);background:rgba(18,106,90,.08)}.card img{width:100%;aspect-ratio:1/1;object-fit:cover;background:#eef1f4}.card .body{padding:8px}.small{font-size:12px;color:var(--muted);word-break:break-word}
     .keycap{position:absolute;top:6px;left:6px;min-width:24px;height:24px;border-radius:999px;background:#1b222a;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;box-shadow:0 2px 8px #0003}.keycap.muted{background:#ffffffde;color:#687382;border:1px solid var(--line)}
     .queuebar{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center}.queuebar button{width:auto}.shortcut{margin-top:8px;padding:8px;border:1px dashed var(--line);border-radius:6px;background:#fafbfc;color:var(--muted)}.hidden{display:none!important}
     .pill{display:inline-block;padding:2px 6px;border-radius:999px;background:#eef1f4;font-size:12px;margin:2px}.bad{background:#fee4e2;color:#912018}.warn{background:#fff2cc;color:#7a4a00}.ok{background:#dcfae6;color:#05603a}
     table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left}
+    .loading-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;color:#fff;font-size:16px;font-weight:700;gap:14px;backdrop-filter:blur(2px)}
+    .spinner{width:40px;height:40px;border:4px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
   </style>
 </head>
 <body>
@@ -566,6 +662,8 @@ HTML = r"""<!doctype html>
       <div class="row"><button id="moveBtn">Move selected</button><button id="bulkMoveBtn">Move all selected</button></div>
       <label>Quarantine label</label><input id="quarantineLabel" value="manual_rejected">
       <div class="row"><button id="quarantineBtn" class="danger">Quarantine</button><button id="futureUseBtn">Future use</button></div>
+      <label>Keep as-is</label>
+      <div class="row"><button id="doneBtn">Mark done</button><button id="doneVisibleBtn">Mark visible done</button></div>
     </div>
     <div class="group"><h2>Model assistant</h2>
       <label>Threshold</label><input id="threshold" type="number" step="0.01" min="0" max="1" value="0.70">
@@ -578,14 +676,15 @@ HTML = r"""<!doctype html>
     <div class="group"><h2>Ảnh</h2>
       <div class="queuebar"><div id="queueStatus" class="small">Row 0/0 · selected 0</div><button id="prevRowBtn">Prev row</button><button id="nextRowBtn">Next row</button></div>
       <div class="row three"><button id="selectRowBtn">Select row</button><button id="selectAllBtn">Select visible</button><button id="clearBtn">Clear</button></div>
-      <div class="shortcut small">1-0 chọn ảnh trong hàng hiện tại · A chọn cả hàng · Space xuống hàng · Shift+Space lên hàng · Enter move · Q quarantine · F future use · P predict · Esc clear</div>
+      <div class="shortcut small">1-0 chọn ảnh trong hàng hiện tại · A chọn cả hàng · D mark done · Space xuống hàng · Shift+Space lên hàng · Enter move · Q quarantine · F future use · P predict · Esc clear</div>
     </div>
+    <div id="loadingOverlay" class="loading-overlay hidden"><div class="spinner"></div>Đang xử lý…</div>
     <div id="grid" class="grid"></div>
   </main>
 </div>
 <script>
 const $=id=>document.getElementById(id);
-const state={items:[],selected:new Set(),preds:{},classes:[],roots:[],cursorRow:0,lastTotal:0,rootMode:'classification',loadSeq:0,activeRoot:'',filterKey:'',initialized:false,watchBusy:false};
+const state={items:[],selected:new Set(),preds:{},classes:[],roots:[],cursorRow:0,lastTotal:0,hiddenDone:0,rootMode:'classification',loadSeq:0,activeRoot:'',filterKey:'',initialized:false,watchBusy:false};
 function status(t){$('status').textContent=t}
 function esc(v){return String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 async function api(url,body=null){const opt=body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{};const r=await fetch(url,opt);const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||r.statusText);return d}
@@ -599,17 +698,20 @@ function columnsPerRow(){const grid=$('grid');const width=grid?.clientWidth||win
 function totalRows(){return state.items.length?Math.ceil(state.items.length/columnsPerRow()):0}
 function clampRow(){const rows=totalRows();state.cursorRow=rows?Math.max(0,Math.min(state.cursorRow,rows-1)):0}
 function rowBounds(row=state.cursorRow){const cols=columnsPerRow();const start=row*cols;return [start,Math.min(start+cols,state.items.length)]}
-function updateQueueStatus(){const rows=totalRows();$('queueStatus').textContent=`Row ${rows?state.cursorRow+1:0}/${rows} · selected ${state.selected.size} · visible ${state.items.length}/${state.lastTotal}`}
+function updateQueueStatus(){const rows=totalRows();const hidden=state.hiddenDone?` · done hidden ${state.hiddenDone}`:'';$('queueStatus').textContent=`Row ${rows?state.cursorRow+1:0}/${rows} · selected ${state.selected.size} · visible ${state.items.length}/${state.lastTotal}${hidden}`}
 function scrollToRow(behavior='smooth'){const [start]=rowBounds();const card=document.querySelector(`.card[data-index="${start}"]`);if(card)card.scrollIntoView({block:'center',behavior})}
-function setRow(row,behavior='smooth'){state.cursorRow=row;clampRow();renderGrid();scrollToRow(behavior)}
-function toggleRowKey(position){const [start,end]=rowBounds();const index=start+position;if(index>=end)return;const it=state.items[index];if(!it)return;state.selected.has(it.id)?state.selected.delete(it.id):state.selected.add(it.id);renderGrid()}
-function selectCurrentRow(){const [start,end]=rowBounds();for(let i=start;i<end;i++)state.selected.add(state.items[i].id);renderGrid()}
+function updateHighlights(){const cols=columnsPerRow();document.querySelectorAll('.card').forEach(card=>{const idx=Number(card.dataset.index);const row=Math.floor(idx/cols);const id=card.dataset.id;card.classList.toggle('active-row',row===state.cursorRow);card.classList.toggle('selected',state.selected.has(id));const kc=card.querySelector('.keycap');if(kc)kc.className=row===state.cursorRow?'keycap':'keycap muted'});updateQueueStatus()}
+function setLoading(busy){$('loadingOverlay').classList.toggle('hidden',!busy)}
+function setRow(row,behavior='smooth'){state.cursorRow=row;clampRow();updateHighlights();requestAnimationFrame(()=>scrollToRow(behavior))}
+function toggleRowKey(position){const [start,end]=rowBounds();const index=start+position;if(index>=end)return;const it=state.items[index];if(!it)return;state.selected.has(it.id)?state.selected.delete(it.id):state.selected.add(it.id);updateHighlights()}
+function selectCurrentRow(){const [start,end]=rowBounds();for(let i=start;i<end;i++)state.selected.add(state.items[i].id);updateHighlights()}
 async function init(){const s=await api('/api/state');state.classes=s.classes;state.roots=s.roots;$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.mode)}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetClass').innerHTML=(state.classes||[]).map(c=>`<option>${esc(c)}</option>`).join('');state.initialized=true;await rootChanged()}
-async function load(opts={}){const seq=++state.loadSeq;const nextRow=opts.keepRow?state.cursorRow:0;state.selected.clear();state.preds={};const rootValue=$('rootSelect').value;status('Loading files...');const q=new URLSearchParams({root:rootValue,page_size:'120'});if(state.rootMode==='classification'){q.set('split',$('splitSelect').value);q.set('class_name',$('classFilter').value)}else{q.set('folder',$('folderFilter').value)}const d=await api('/api/browse?'+q);if(seq!==state.loadSeq)return;state.rootMode=d.mode||state.rootMode;state.activeRoot=rootValue;state.filterKey=currentFilterKey();state.items=d.items;state.lastTotal=d.total;state.cursorRow=nextRow;clampRow();renderCounts(d.counts);renderGrid();status(`${d.total} files · queue refreshed`);scrollToRow('auto')}
+async function load(opts={}){const seq=++state.loadSeq;const nextRow=opts.keepRow?state.cursorRow:0;state.selected.clear();state.preds={};const rootValue=$('rootSelect').value;status('Loading files...');const q=new URLSearchParams({root:rootValue,page_size:'120'});if(state.rootMode==='classification'){q.set('split',$('splitSelect').value);q.set('class_name',$('classFilter').value)}else{q.set('folder',$('folderFilter').value)}const d=await api('/api/browse?'+q);if(seq!==state.loadSeq)return;state.rootMode=d.mode||state.rootMode;state.activeRoot=rootValue;state.filterKey=currentFilterKey();state.items=d.items;state.lastTotal=d.total;state.hiddenDone=d.hidden_done||0;state.cursorRow=nextRow;clampRow();renderCounts(d.counts);renderGrid();status(`${d.total} files · queue refreshed`);scrollToRow('auto')}
 function renderCounts(c){const detail=state.rootMode==='classification'?c.classes:c.folders;const detailTitle=state.rootMode==='classification'?'Classes':'Folders';$('counts').innerHTML=`<div class=stats><div class=stat>Total<br><b>${c.total}</b></div><div class=stat>${detailTitle}<br><b>${Object.keys(detail||{}).length}</b></div><div class=stat>Sources<br><b>${esc(Object.keys(c.sources).join(', ')||'-')}</b></div></div><pre>${esc(JSON.stringify(detail||{},null,2))}</pre>`}
-function renderGrid(){const cols=columnsPerRow();$('grid').innerHTML=state.items.map((it,idx)=>{const p=state.preds[it.id];const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';const row=Math.floor(idx/cols);const keyIndex=idx%cols;const key=keyIndex===9?'0':String(keyIndex+1);const active=row===state.cursorRow;return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div><div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`}).join('');document.querySelectorAll('.card').forEach(card=>{card.onclick=e=>{if(e.target.dataset.fb){feedback(card.dataset.id,e.target.dataset.fb);return}state.cursorRow=Math.floor(Number(card.dataset.index)/columnsPerRow());state.selected.has(card.dataset.id)?state.selected.delete(card.dataset.id):state.selected.add(card.dataset.id);renderGrid()}});updateQueueStatus()}
-async function act(action,extra={}){const ids=[...state.selected];if(!ids.length){alert('Chưa chọn ảnh');return}status(`Đang xử lý ${ids.length} ảnh...`);let ok=0;for(const id of ids){await api('/api/action',{action,item_id:id,...extra});ok++}await load({keepRow:true});status(`Đã xử lý ${ok} ảnh; đã nạp ảnh tiếp theo`)}
-async function predict(){const ids=state.items.map(x=>x.id);if(!ids.length)return;status(`Predict ${ids.length} ảnh visible...`);const d=await api('/api/predict',{item_ids:ids,threshold:Number($('threshold').value)});state.preds={};for(const p of d.predictions)state.preds[p.id]=p;const counts={};for(const p of d.predictions)counts[p.decision]=(counts[p.decision]||0)+1;$('modelStats').textContent=JSON.stringify(counts);renderGrid();status('Predict xong')}
+function renderGrid(){const cols=columnsPerRow();$('grid').innerHTML=state.items.map((it,idx)=>{const p=state.preds[it.id];const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';const row=Math.floor(idx/cols);const keyIndex=idx%cols;const key=keyIndex===9?'0':String(keyIndex+1);const active=row===state.cursorRow;return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}" loading="lazy"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div><div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`}).join('');document.querySelectorAll('.card').forEach(card=>{card.onclick=e=>{if(e.target.dataset.fb){feedback(card.dataset.id,e.target.dataset.fb);return}state.cursorRow=Math.floor(Number(card.dataset.index)/columnsPerRow());state.selected.has(card.dataset.id)?state.selected.delete(card.dataset.id):state.selected.add(card.dataset.id);updateHighlights()}});updateQueueStatus()}
+async function act(action,extra={}){const ids=[...state.selected];if(!ids.length){alert('Chưa chọn ảnh');return}setLoading(true);status(`Đang xử lý ${ids.length} ảnh...`);try{const d=await api('/api/batch-action',{action,item_ids:ids,...extra});await load({keepRow:true});status(`Đã xử lý ${d.processed} ảnh`)}catch(e){status('Lỗi: '+e.message)}finally{setLoading(false)}}
+async function actVisible(action,extra={}){const ids=state.items.map(x=>x.id);if(!ids.length){alert('Không có ảnh visible');return}setLoading(true);status(`Đang xử lý ${ids.length} ảnh visible...`);try{const d=await api('/api/batch-action',{action,item_ids:ids,...extra});await load({keepRow:true});status(`Đã xử lý ${d.processed} ảnh visible`)}catch(e){status('Lỗi: '+e.message)}finally{setLoading(false)}}
+async function predict(){const ids=state.items.map(x=>x.id);if(!ids.length)return;setLoading(true);status(`Predict ${ids.length} ảnh visible...`);const d=await api('/api/predict',{item_ids:ids,threshold:Number($('threshold').value)});state.preds={};for(const p of d.predictions)state.preds[p.id]=p;const counts={};for(const p of d.predictions)counts[p.decision]=(counts[p.decision]||0)+1;$('modelStats').textContent=JSON.stringify(counts);renderGrid();status('Predict xong');setLoading(false)}
 async function feedback(id,val){const it=state.items.find(x=>x.id===id),p=state.preds[id]||{};await api('/api/feedback',{timestamp:new Date().toISOString(),item_id:id,current_class:it.class_name,model_top1:p.top1||'',is_correct:val,correct_class:val==='yes'?p.top1:'',note:''});status('Saved feedback')}
 const rootChanged=async()=>{await syncRootFilters();await load({keepRow:false})};
 const filterChanged=()=>load({keepRow:false});
@@ -623,13 +725,15 @@ $('moveBtn').onclick=()=>act('move_class',{class_name:$('targetClass').value});
 $('bulkMoveBtn').onclick=$('moveBtn').onclick;
 $('quarantineBtn').onclick=()=>act('quarantine',{label:$('quarantineLabel').value});
 $('futureUseBtn').onclick=()=>act('quarantine',{label:'future_use_'+$('quarantineLabel').value});
+$('doneBtn').onclick=()=>act('mark_done',{note:'kept_as_is'});
+$('doneVisibleBtn').onclick=()=>actVisible('mark_done',{note:'visible_kept_as_is'});
 $('predictBtn').onclick=predict;
 $('selectRowBtn').onclick=selectCurrentRow;
-$('selectAllBtn').onclick=()=>{state.items.forEach(x=>state.selected.add(x.id));renderGrid()};
-$('clearBtn').onclick=()=>{state.selected.clear();renderGrid()};
+$('selectAllBtn').onclick=()=>{state.items.forEach(x=>state.selected.add(x.id));updateHighlights()};
+$('clearBtn').onclick=()=>{state.selected.clear();updateHighlights()};
 $('prevRowBtn').onclick=()=>setRow(state.cursorRow-1);
 $('nextRowBtn').onclick=()=>setRow(state.cursorRow+1);
-document.addEventListener('keydown',e=>{if(isTypingTarget(e.target)||e.ctrlKey||e.metaKey||e.altKey)return;const key=e.key.toLowerCase();if(/^[1-9]$/.test(e.key)){e.preventDefault();toggleRowKey(Number(e.key)-1);return}if(e.key==='0'){e.preventDefault();toggleRowKey(9);return}if(e.code==='Space'){e.preventDefault();setRow(state.cursorRow+(e.shiftKey?-1:1));return}if(e.key==='ArrowDown'){e.preventDefault();setRow(state.cursorRow+1);return}if(e.key==='ArrowUp'){e.preventDefault();setRow(state.cursorRow-1);return}if(e.key==='Enter'){e.preventDefault();$('moveBtn').click();return}if(key==='q'){e.preventDefault();$('quarantineBtn').click();return}if(key==='f'){e.preventDefault();$('futureUseBtn').click();return}if(key==='p'){e.preventDefault();predict();return}if(key==='a'){e.preventDefault();selectCurrentRow();return}if(e.key==='Escape'){state.selected.clear();renderGrid();return}});
+document.addEventListener('keydown',e=>{if(isTypingTarget(e.target)||e.ctrlKey||e.metaKey||e.altKey)return;const key=e.key.toLowerCase();if(/^[1-9]$/.test(e.key)){e.preventDefault();toggleRowKey(Number(e.key)-1);return}if(e.key==='0'){e.preventDefault();toggleRowKey(9);return}if(e.code==='Space'){e.preventDefault();setRow(state.cursorRow+(e.shiftKey?-1:1));return}if(e.key==='ArrowDown'){e.preventDefault();setRow(state.cursorRow+1);return}if(e.key==='ArrowUp'){e.preventDefault();setRow(state.cursorRow-1);return}if(e.key==='Enter'){e.preventDefault();$('moveBtn').click();return}if(key==='q'){e.preventDefault();$('quarantineBtn').click();return}if(key==='f'){e.preventDefault();$('futureUseBtn').click();return}if(key==='d'){e.preventDefault();$('doneBtn').click();return}if(key==='p'){e.preventDefault();predict();return}if(key==='a'){e.preventDefault();selectCurrentRow();return}if(e.key==='Escape'){state.selected.clear();updateHighlights();return}});
 let resizeTimer=null;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{clampRow();renderGrid();scrollToRow('auto')},120)});
 setInterval(async()=>{if(!state.initialized||state.watchBusy)return;const key=currentFilterKey();if(key===state.filterKey)return;state.watchBusy=true;try{if($('rootSelect').value!==state.activeRoot)await syncRootFilters();await load({keepRow:false})}finally{state.watchBusy=false}},500);
 init().catch(e=>{status(e.message);alert(e.message)});
@@ -714,7 +818,30 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "quarantine":
                     self.send_json(STORE.quarantine(str(payload["item_id"]), str(payload.get("label") or "manual_rejected")))
                     return
+                if action == "mark_done":
+                    self.send_json(STORE.mark_done(str(payload["item_id"]), str(payload.get("note") or "kept_as_is")))
+                    return
                 raise ValueError("Unsupported action")
+            if parsed.path == "/api/batch-action":
+                action = payload.get("action")
+                item_ids = payload.get("item_ids", [])
+                processed = 0
+                errors: list[dict[str, str]] = []
+                for item_id in item_ids:
+                    try:
+                        if action == "move_class":
+                            STORE.move_to_class(str(item_id), str(payload["class_name"]))
+                        elif action == "quarantine":
+                            STORE.quarantine(str(item_id), str(payload.get("label") or "manual_rejected"))
+                        elif action == "mark_done":
+                            STORE.mark_done(str(item_id), str(payload.get("note") or "kept_as_is"))
+                        else:
+                            raise ValueError("Unsupported action")
+                        processed += 1
+                    except Exception as exc:
+                        errors.append({"item_id": str(item_id), "error": str(exc)})
+                self.send_json({"ok": True, "processed": processed, "errors": errors})
+                return
             if parsed.path == "/api/undo":
                 self.send_json(STORE.undo())
                 return
