@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 from torchvision import models, transforms
+from torchvision.transforms import InterpolationMode
 
 SUPPORTED_ARCHES = (
     "mobilenet_v3_small",
@@ -15,6 +16,8 @@ SUPPORTED_ARCHES = (
     "resnet50",
     "convnext_tiny",
 )
+
+SUPPORTED_AUGMENTATIONS = ("light", "medium", "strong")
 
 
 def _replace_classifier_tail(model: nn.Module, num_classes: int) -> nn.Module:
@@ -69,15 +72,73 @@ def build_classifier(num_classes: int, pretrained: bool = True, arch: str = "mob
     raise ValueError(f"Unsupported architecture: {arch}. Supported: {', '.join(SUPPORTED_ARCHES)}")
 
 
-def train_transforms(image_size: int = 224) -> transforms.Compose:
+def train_transforms(image_size: int = 224, augmentation: str = "medium") -> transforms.Compose:
+    if augmentation not in SUPPORTED_AUGMENTATIONS:
+        raise ValueError(f"Unsupported augmentation: {augmentation}. Supported: {', '.join(SUPPORTED_AUGMENTATIONS)}")
+
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    if augmentation == "light":
+        return transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size)),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomRotation(10, interpolation=InterpolationMode.BILINEAR),
+                transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.1),
+                transforms.ToTensor(),
+                normalize,
+            ]
+        )
+
+    if augmentation == "medium":
+        return transforms.Compose(
+            [
+                transforms.RandomResizedCrop(
+                    image_size,
+                    scale=(0.78, 1.0),
+                    ratio=(0.85, 1.18),
+                    interpolation=InterpolationMode.BILINEAR,
+                ),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomAffine(
+                    degrees=12,
+                    translate=(0.04, 0.04),
+                    scale=(0.94, 1.06),
+                    shear=3,
+                    interpolation=InterpolationMode.BILINEAR,
+                ),
+                transforms.RandomPerspective(distortion_scale=0.08, p=0.2),
+                transforms.ColorJitter(brightness=0.22, contrast=0.22, saturation=0.15, hue=0.02),
+                transforms.RandomAutocontrast(p=0.15),
+                transforms.ToTensor(),
+                normalize,
+                transforms.RandomErasing(p=0.1, scale=(0.02, 0.08), ratio=(0.5, 2.0), value="random"),
+            ]
+        )
+
     return transforms.Compose(
         [
-            transforms.Resize((image_size, image_size)),
+            transforms.RandomResizedCrop(
+                image_size,
+                scale=(0.68, 1.0),
+                ratio=(0.75, 1.33),
+                interpolation=InterpolationMode.BILINEAR,
+            ),
             transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomRotation(10),
-            transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.1),
+            transforms.RandomAffine(
+                degrees=18,
+                translate=(0.06, 0.06),
+                scale=(0.9, 1.12),
+                shear=5,
+                interpolation=InterpolationMode.BILINEAR,
+            ),
+            transforms.RandomPerspective(distortion_scale=0.12, p=0.3),
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.22, hue=0.03),
+            transforms.RandomAutocontrast(p=0.2),
+            transforms.RandomAdjustSharpness(sharpness_factor=1.6, p=0.2),
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.2))], p=0.12),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            normalize,
+            transforms.RandomErasing(p=0.18, scale=(0.02, 0.12), ratio=(0.4, 2.5), value="random"),
         ]
     )
 

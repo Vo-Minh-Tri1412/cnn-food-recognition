@@ -97,6 +97,8 @@ def list_samples(root: Path, class_names: list[str]) -> list[tuple[Path, str]]:
 def target_layer_for(model: torch.nn.Module) -> torch.nn.Module:
     if hasattr(model, "features"):
         return model.features[-1]
+    if hasattr(model, "layer4"):
+        return model.layer4[-1]
     raise ValueError("Cannot infer target layer for this architecture.")
 
 

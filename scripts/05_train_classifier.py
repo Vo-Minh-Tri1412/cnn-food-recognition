@@ -24,6 +24,7 @@ from tqdm import tqdm
 from canteen_checkout.config import CLASSIFICATION_DIR, DEFAULT_MODEL_PATH, DISH_CLASSES, REPORTS_DIR
 from canteen_checkout.io_utils import IMAGE_EXTENSIONS, save_class_names
 from canteen_checkout.model import (
+    SUPPORTED_AUGMENTATIONS,
     SUPPORTED_ARCHES,
     build_classifier,
     eval_transforms,
@@ -138,19 +139,22 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--arch", choices=SUPPORTED_ARCHES, default="mobilenet_v3_small")
+    parser.add_argument("--augmentation", choices=SUPPORTED_AUGMENTATIONS, default="medium")
     parser.add_argument("--no-weighted-loss", action="store_true", help="Disable class-balanced loss weights.")
     parser.add_argument("--label-smoothing", type=float, default=0.0)
     parser.add_argument("--no-pretrained", action="store_true")
     parser.add_argument("--allow-empty-val", action="store_true")
     args = parser.parse_args()
 
-    train_ds = FixedClassImageDataset(args.data / "train", DISH_CLASSES, train_transforms(args.image_size))
+    train_ds = FixedClassImageDataset(args.data / "train", DISH_CLASSES, train_transforms(args.image_size, args.augmentation))
     val_ds = FixedClassImageDataset(args.data / "val", DISH_CLASSES, eval_transforms(args.image_size))
     test_ds = FixedClassImageDataset(args.data / "test", DISH_CLASSES, eval_transforms(args.image_size))
 
     print("train counts:", train_ds.counts_by_class())
     print("val counts:", val_ds.counts_by_class())
     print("test counts:", test_ds.counts_by_class())
+    print(f"arch: {args.arch}")
+    print(f"augmentation: {args.augmentation}")
 
     if len(train_ds) == 0:
         raise SystemExit("No training images found. Put labeled crops under data/classification/train/<class_name>/")
@@ -191,7 +195,7 @@ def main() -> None:
                 model,
                 DISH_CLASSES,
                 args.image_size,
-                metadata={"best_val_acc": best_val_acc, "epoch": epoch, "arch": args.arch},
+                metadata={"best_val_acc": best_val_acc, "epoch": epoch, "arch": args.arch, "augmentation": args.augmentation},
                 arch=args.arch,
             )
 

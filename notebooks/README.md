@@ -1,9 +1,12 @@
-# Notebook moved
+# Notebook Index
 
-Notebook chính cho Colab/Kaggle/Drive hiện nằm ở root repo:
+Main Colab/Kaggle notebooks live at the repository root:
 
 ```text
-00_colab_kaggle_workflow.ipynb
+00_colab_kaggle_workflow.ipynb     # train on Colab/Kaggle/Drive
+01_colab_demo_checkout.ipynb       # upload one tray image and run checkout
+02_colab_gradcam_debug.ipynb       # inspect weak classes with Grad-CAM
+03_colab_read_reports.ipynb        # read report, loss, and confusion matrix
 ```
 
-Lý do: Google Colab và Kaggle mở notebook ở root repo thuận tiện hơn, ít lỗi đường dẫn hơn.
+Keeping them at the root makes GitHub, Google Colab, and Kaggle paths simpler.

@@ -25,9 +25,12 @@ Cloud workflow entrypoint:
 
 ```text
 00_colab_kaggle_workflow.ipynb
+01_colab_demo_checkout.ipynb
+02_colab_gradcam_debug.ipynb
+03_colab_read_reports.ipynb
 ```
 
-Open this notebook from GitHub in Google Colab or upload/import it into Kaggle. The notebook is designed to clone this repo, find a packaged dataset, train, and save model/report artifacts.
+Open these notebooks from GitHub in Google Colab or upload/import them into Kaggle. The `00` notebook is designed to clone this repo, find a packaged dataset, train, and save model/report artifacts. The other notebooks are smaller control panels for demo inference, Grad-CAM, and reading training reports.
 
 ## Core Data Tree
 
@@ -229,6 +232,7 @@ Recommended local training command:
 ```powershell
 .\.venv\Scripts\python.exe scripts\05_train_classifier.py `
   --arch efficientnet_b0 `
+  --augmentation medium `
   --epochs 6 `
   --batch-size 8 `
   --lr 0.0001 `
@@ -251,6 +255,17 @@ convnext_tiny
 
 For Colab GPU, start with `efficientnet_b2`. If it runs out of memory, use
 `efficientnet_b0` or reduce `--batch-size` to `4`.
+
+Supported `--augmentation` choices:
+
+```text
+light
+medium
+strong
+```
+
+The Colab training notebook defaults to `strong`. If validation loss becomes
+unstable, switch to `medium`.
 
 Outputs:
 
@@ -295,10 +310,13 @@ Manual crop helper:
 
 ## Notebook
 
-Use the root cloud workflow notebook:
+Use the root cloud workflow notebooks:
 
 ```text
-00_colab_kaggle_workflow.ipynb
+00_colab_kaggle_workflow.ipynb     # train on Colab/Kaggle/Drive
+01_colab_demo_checkout.ipynb       # upload one tray image and run checkout
+02_colab_gradcam_debug.ipynb       # inspect weak classes with Grad-CAM
+03_colab_read_reports.ipynb        # read classification report/loss/confusion matrix
 ```
 
-It documents which script to run for local packaging, Google Drive dataset loading, Kaggle input loading, training, report reading, and artifact export. The old `notebooks/` folder now only contains a pointer README.
+The `00` notebook documents which script to run for local packaging, Google Drive dataset loading, Kaggle input loading, training, report reading, and artifact export. The old `notebooks/` folder now only contains a pointer README.
