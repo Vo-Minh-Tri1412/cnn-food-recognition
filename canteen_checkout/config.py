@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-DATA_DIR = PROJECT_ROOT / "data"
+
+def _env_path(name: str, default: Path) -> Path:
+    value = os.environ.get(name)
+    if not value:
+        return default
+    path = Path(value)
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+DATA_DIR = _env_path("CANTEEN_DATA_DIR", PROJECT_ROOT / "data")
 INBOX_DIR = DATA_DIR / "inbox"
 REVIEW_INBOX_DIR = INBOX_DIR / "review"
 REVIEWED_DIR = DATA_DIR / "reviewed"
@@ -21,8 +31,8 @@ TEMP_TEACHER_CROPS_DIR = DATA_DIR / "temp_teacher_crops"
 ARCHIVE_DIR = DATA_DIR / "archive"
 SCRAPED_MANIFEST_CSV = DATA_DIR / "scraped_manifest.csv"
 
-MODELS_DIR = PROJECT_ROOT / "models"
-OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+MODELS_DIR = _env_path("CANTEEN_MODEL_DIR", PROJECT_ROOT / "models")
+OUTPUTS_DIR = _env_path("CANTEEN_OUTPUTS_DIR", PROJECT_ROOT / "outputs")
 CROPPED_DISHES_DIR = OUTPUTS_DIR / "cropped_dishes"
 BILLS_DIR = OUTPUTS_DIR / "bills"
 REPORTS_DIR = OUTPUTS_DIR / "reports"

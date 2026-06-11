@@ -21,6 +21,14 @@ Use the local virtual environment:
 
 Main dependencies are PyTorch, torchvision, OpenCV, Pillow, pandas, scikit-learn, matplotlib, tqdm, and Jupyter.
 
+Cloud workflow entrypoint:
+
+```text
+00_colab_kaggle_workflow.ipynb
+```
+
+Open this notebook from GitHub in Google Colab or upload/import it into Kaggle. The notebook is designed to clone this repo, find a packaged dataset, train, and save model/report artifacts.
+
 ## Core Data Tree
 
 ```text
@@ -187,6 +195,33 @@ Audit the final dataset:
 .\.venv\Scripts\python.exe scripts\20_audit_dataset_conflicts.py --root data\classification --phash-threshold 4
 ```
 
+## Package For Colab Or Kaggle
+
+Package the generated training dataset into one archive:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\27_package_cloud_dataset.py
+```
+
+Outputs:
+
+```text
+outputs/cloud/classification.zip
+outputs/cloud/classification.manifest.json
+```
+
+Current dataset size is about 149 MB, so it is reasonable to store on Google Drive or as a Kaggle Dataset. Prefer copying the zip to the cloud runtime and unzipping there before training; do not train directly from many small files on Drive.
+
+Recommended locations:
+
+```text
+Google Drive:
+MyDrive/canteen_checkout/datasets/classification.zip
+
+Kaggle:
+/kaggle/input/<your-dataset>/classification.zip
+```
+
 ## Train
 
 Recommended local training command:
@@ -243,10 +278,10 @@ Manual crop helper:
 
 ## Notebook
 
-Use the Vietnamese workflow notebook:
+Use the root cloud workflow notebook:
 
 ```text
-notebooks/00_workflow_tieng_viet.ipynb
+00_colab_kaggle_workflow.ipynb
 ```
 
-It documents which script to run for data audit, Data IDE, crawl/search, import, build, train, report reading, and demo.
+It documents which script to run for local packaging, Google Drive dataset loading, Kaggle input loading, training, report reading, and artifact export. The old `notebooks/` folder now only contains a pointer README.
