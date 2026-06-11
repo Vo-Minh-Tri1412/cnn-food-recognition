@@ -62,7 +62,7 @@ def save_checkpoint(path, model, class_names, image_size: int, metadata: dict | 
 
 
 def load_checkpoint(path, device: torch.device):
-    checkpoint = torch.load(path, map_location=device)
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
     class_names = checkpoint["class_names"]
     arch = checkpoint.get("arch", "mobilenet_v3_small")
     model = build_classifier(num_classes=len(class_names), pretrained=False, arch=arch)

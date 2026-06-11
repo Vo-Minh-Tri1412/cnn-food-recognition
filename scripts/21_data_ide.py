@@ -20,7 +20,17 @@ if hasattr(sys.stdout, "reconfigure"):
 import torch
 from PIL import Image
 
-from canteen_checkout.config import CLASSIFICATION_DIR, DEFAULT_MODEL_PATH, DISH_CLASSES, DOWNLOADS_DIR, IMAGE_EXTENSIONS, PROJECT_ROOT
+from canteen_checkout.config import (
+    CLASSIFICATION_DIR,
+    DATA_DIR,
+    DEFAULT_MODEL_PATH,
+    DISH_CLASSES,
+    EXTRAS_DIR,
+    IMAGE_EXTENSIONS,
+    PROJECT_ROOT,
+    REVIEW_INBOX_DIR,
+    REVIEWED_DIR,
+)
 from canteen_checkout.data_quality import assess_image, hamming_distance_hex
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 
@@ -132,15 +142,25 @@ def unique_destination(folder: Path, filename: str) -> Path:
 
 
 def roots() -> list[dict[str, str]]:
-    external_roots = sorted((DOWNLOADS_DIR / "external_staging").glob("external_*"), key=lambda p: p.stat().st_mtime, reverse=True)
-    latest_external = external_roots[0] if external_roots else DOWNLOADS_DIR / "external_staging"
     candidates = [
         ("classification", CLASSIFICATION_DIR, "classification"),
-        ("external_review", latest_external / "review", "folder"),
-        ("external_reviewed", latest_external / "reviewed", "folder"),
-        ("quarantine", PROJECT_ROOT / "data" / "quarantine", "folder"),
+        ("inbox_review", REVIEW_INBOX_DIR, "folder"),
+        ("reviewed", REVIEWED_DIR, "folder"),
+        ("extras", EXTRAS_DIR, "folder"),
+        ("quarantine", DATA_DIR / "quarantine", "folder"),
+        ("data_workspace", DATA_DIR, "folder"),
     ]
     return [{"name": name, "path": relative_or_absolute(path), "mode": mode} for name, path, mode in candidates if path.exists()]
+
+
+def target_roots() -> list[dict[str, str]]:
+    candidates = [
+        ("reviewed", REVIEWED_DIR),
+        ("inbox_review", REVIEW_INBOX_DIR),
+        ("extras", EXTRAS_DIR),
+        ("quarantine", DATA_DIR / "quarantine"),
+    ]
+    return [{"name": name, "path": relative_or_absolute(path)} for name, path in candidates if path.exists()]
 
 
 def root_mode(root: Path) -> str:
@@ -380,6 +400,7 @@ class DataIDE:
         root_list = roots()
         return {
             "roots": root_list,
+            "target_roots": target_roots(),
             "classes": DISH_CLASSES,
             "log": relative_or_absolute(action_log()),
         }
@@ -458,19 +479,19 @@ class DataIDE:
         raise ValueError("Unknown item")
 
     def move_to_class(self, item_id: str, class_name: str) -> dict[str, object]:
-        if class_name not in DISH_CLASSES:
-            raise ValueError("Invalid target class")
+        return self.move_to_target(item_id, REVIEWED_DIR, class_name)
+
+    def move_to_target(self, item_id: str, target_root_value: str | Path, target_label: str) -> dict[str, object]:
         item = self.item_from_id(item_id)
-        if item.class_name == class_name:
+        target_root = resolve_project_path(target_root_value)
+        if not is_inside(target_root, DATA_DIR):
+            raise ValueError("Target root must be inside data/")
+        target_label = safe_label(target_label)
+        if target_root.resolve() == REVIEWED_DIR.resolve() and target_label not in DISH_CLASSES:
+            raise ValueError("Reviewed target must be one of the 11 official classes")
+        target_dir = target_root / target_label
+        if item.path.resolve() == (target_dir / item.filename).resolve():
             return {"ok": True, "output_path": item.rel_path, "noop": True}
-        if item.split in {"train", "val", "test"}:
-            target_dir = item.path.parents[1] / class_name
-        elif "external_staging" in item.path.parts and "review" in item.path.parts:
-            review_index = item.path.parts.index("review")
-            review_dir = Path(*item.path.parts[: review_index + 1])
-            target_dir = review_dir.parent / "reviewed" / class_name
-        else:
-            target_dir = item.path.parent.parent / class_name
         target = unique_destination(target_dir, item.filename)
         shutil.move(str(item.path), str(target))
         invalidate_data_cache()
@@ -480,36 +501,17 @@ class DataIDE:
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "item_id": item.item_id,
                 "source_path": item.rel_path,
-                "action": "move_class",
+                "action": "move_target",
                 "from_class": item.class_name,
-                "to_class": class_name,
+                "to_class": target_label,
                 "output_path": relative_or_absolute(target),
-                "note": "",
+                "note": relative_or_absolute(target_root),
             },
         )
         return {"ok": True, "output_path": relative_or_absolute(target)}
 
     def quarantine(self, item_id: str, label: str = "manual_rejected") -> dict[str, object]:
-        item = self.item_from_id(item_id)
-        label = safe_label(label)
-        target_dir = PROJECT_ROOT / "data" / "quarantine" / label / item.class_name
-        target = unique_destination(target_dir, item.filename)
-        shutil.move(str(item.path), str(target))
-        invalidate_data_cache()
-        append_action(
-            action_log(),
-            {
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-                "item_id": item.item_id,
-                "source_path": item.rel_path,
-                "action": "quarantine",
-                "from_class": item.class_name,
-                "to_class": label,
-                "output_path": relative_or_absolute(target),
-                "note": label,
-            },
-        )
-        return {"ok": True, "output_path": relative_or_absolute(target)}
+        return self.move_to_target(item_id, DATA_DIR / "quarantine", label)
 
     def mark_done(self, item_id: str, note: str = "kept_as_is") -> dict[str, object]:
         item = self.item_from_id(item_id)
@@ -658,8 +660,9 @@ HTML = r"""<!doctype html>
       <div class="row"><button id="loadBtn" class="primary">Load</button><button id="undoBtn">Undo</button></div>
     </div>
     <div class="group"><h2>Action</h2>
-      <label>Move to class</label><select id="targetClass"></select>
-      <div class="row"><button id="moveBtn">Move selected</button><button id="bulkMoveBtn">Move all selected</button></div>
+      <label>Target root</label><select id="targetRoot"></select>
+      <label>Target class / label</label><input id="targetLabel" list="targetLabelList" value="com_trang"><datalist id="targetLabelList"></datalist>
+      <div class="row"><button id="moveBtn">Move selected</button><button id="bulkMoveBtn">Move visible</button></div>
       <label>Quarantine label</label><input id="quarantineLabel" value="manual_rejected">
       <div class="row"><button id="quarantineBtn" class="danger">Quarantine</button><button id="futureUseBtn">Future use</button></div>
       <label>Keep as-is</label>
@@ -684,13 +687,15 @@ HTML = r"""<!doctype html>
 </div>
 <script>
 const $=id=>document.getElementById(id);
-const state={items:[],selected:new Set(),preds:{},classes:[],roots:[],cursorRow:0,lastTotal:0,hiddenDone:0,rootMode:'classification',loadSeq:0,activeRoot:'',filterKey:'',initialized:false,watchBusy:false};
+const state={items:[],selected:new Set(),preds:{},classes:[],roots:[],targetRoots:[],cursorRow:0,lastTotal:0,hiddenDone:0,rootMode:'classification',loadSeq:0,activeRoot:'',filterKey:'',initialized:false,watchBusy:false};
 function status(t){$('status').textContent=t}
 function esc(v){return String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 async function api(url,body=null){const opt=body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{};const r=await fetch(url,opt);const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||r.statusText);return d}
 function clsOptions(){return [''].concat(state.classes||[]).map(c=>`<option value="${esc(c)}">${esc(c||'all')}</option>`).join('')}
 function isTypingTarget(target){return ['INPUT','SELECT','TEXTAREA'].includes(target?.tagName)||target?.isContentEditable}
 function rootInfo(){return state.roots.find(r=>r.path===$('rootSelect').value)||state.roots[0]||{mode:'classification'}}
+function targetRootByName(name){return (state.targetRoots.find(r=>r.name===name)||state.targetRoots[0]||{}).path||''}
+function targetPayload(){return {target_root:$('targetRoot').value,target_label:$('targetLabel').value}}
 function currentFilterKey(){return [$('rootSelect').value,state.rootMode,$('splitSelect').value,$('classFilter').value,$('folderFilter').value].join('|')}
 function setHidden(id,hidden){$(id).classList.toggle('hidden',hidden)}
 async function syncRootFilters(){const info=rootInfo();state.rootMode=info.mode||'folder';const isClass=state.rootMode==='classification';setHidden('splitLabel',!isClass);setHidden('splitSelect',!isClass);setHidden('classFilterLabel',!isClass);setHidden('classFilter',!isClass);setHidden('folderFilterLabel',isClass);setHidden('folderFilter',isClass);if(isClass){$('folderFilter').innerHTML='<option value="">all folders</option>';return}const d=await api('/api/folders?'+new URLSearchParams({root:$('rootSelect').value}));const opts=[''].concat(d.folders||[]);$('folderFilter').innerHTML=opts.map(f=>`<option value="${esc(f)}">${esc(f||'all folders')}</option>`).join('')}
@@ -705,7 +710,7 @@ function setLoading(busy){$('loadingOverlay').classList.toggle('hidden',!busy)}
 function setRow(row,behavior='smooth'){state.cursorRow=row;clampRow();updateHighlights();requestAnimationFrame(()=>scrollToRow(behavior))}
 function toggleRowKey(position){const [start,end]=rowBounds();const index=start+position;if(index>=end)return;const it=state.items[index];if(!it)return;state.selected.has(it.id)?state.selected.delete(it.id):state.selected.add(it.id);updateHighlights()}
 function selectCurrentRow(){const [start,end]=rowBounds();for(let i=start;i<end;i++)state.selected.add(state.items[i].id);updateHighlights()}
-async function init(){const s=await api('/api/state');state.classes=s.classes;state.roots=s.roots;$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.mode)}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetClass').innerHTML=(state.classes||[]).map(c=>`<option>${esc(c)}</option>`).join('');state.initialized=true;await rootChanged()}
+async function init(){const s=await api('/api/state');state.classes=s.classes;state.roots=s.roots;state.targetRoots=s.target_roots||[];$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.mode)}</option>`).join('');$('targetRoot').innerHTML=state.targetRoots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetLabelList').innerHTML=(state.classes||[]).concat(['canh_chua_hai_san','khay_background','mon_khac','mon_ngoai_de','future_use']).map(c=>`<option value="${esc(c)}"></option>`).join('');state.initialized=true;await rootChanged()}
 async function load(opts={}){const seq=++state.loadSeq;const nextRow=opts.keepRow?state.cursorRow:0;state.selected.clear();state.preds={};const rootValue=$('rootSelect').value;status('Loading files...');const q=new URLSearchParams({root:rootValue,page_size:'120'});if(state.rootMode==='classification'){q.set('split',$('splitSelect').value);q.set('class_name',$('classFilter').value)}else{q.set('folder',$('folderFilter').value)}const d=await api('/api/browse?'+q);if(seq!==state.loadSeq)return;state.rootMode=d.mode||state.rootMode;state.activeRoot=rootValue;state.filterKey=currentFilterKey();state.items=d.items;state.lastTotal=d.total;state.hiddenDone=d.hidden_done||0;state.cursorRow=nextRow;clampRow();renderCounts(d.counts);renderGrid();status(`${d.total} files · queue refreshed`);scrollToRow('auto')}
 function renderCounts(c){const detail=state.rootMode==='classification'?c.classes:c.folders;const detailTitle=state.rootMode==='classification'?'Classes':'Folders';$('counts').innerHTML=`<div class=stats><div class=stat>Total<br><b>${c.total}</b></div><div class=stat>${detailTitle}<br><b>${Object.keys(detail||{}).length}</b></div><div class=stat>Sources<br><b>${esc(Object.keys(c.sources).join(', ')||'-')}</b></div></div><pre>${esc(JSON.stringify(detail||{},null,2))}</pre>`}
 function renderGrid(){const cols=columnsPerRow();$('grid').innerHTML=state.items.map((it,idx)=>{const p=state.preds[it.id];const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';const row=Math.floor(idx/cols);const keyIndex=idx%cols;const key=keyIndex===9?'0':String(keyIndex+1);const active=row===state.cursorRow;return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}" loading="lazy"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div><div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`}).join('');document.querySelectorAll('.card').forEach(card=>{card.onclick=e=>{if(e.target.dataset.fb){feedback(card.dataset.id,e.target.dataset.fb);return}state.cursorRow=Math.floor(Number(card.dataset.index)/columnsPerRow());state.selected.has(card.dataset.id)?state.selected.delete(card.dataset.id):state.selected.add(card.dataset.id);updateHighlights()}});updateQueueStatus()}
@@ -721,10 +726,10 @@ $('splitSelect').onchange=filterChanged;$('splitSelect').oninput=filterChanged;
 $('classFilter').onchange=filterChanged;$('classFilter').oninput=filterChanged;
 $('loadBtn').onclick=()=>load({keepRow:false});
 $('undoBtn').onclick=async()=>{await api('/api/undo',{});await load({keepRow:true})};
-$('moveBtn').onclick=()=>act('move_class',{class_name:$('targetClass').value});
-$('bulkMoveBtn').onclick=$('moveBtn').onclick;
-$('quarantineBtn').onclick=()=>act('quarantine',{label:$('quarantineLabel').value});
-$('futureUseBtn').onclick=()=>act('quarantine',{label:'future_use_'+$('quarantineLabel').value});
+$('moveBtn').onclick=()=>act('move_target',targetPayload());
+$('bulkMoveBtn').onclick=()=>actVisible('move_target',targetPayload());
+$('quarantineBtn').onclick=()=>act('move_target',{target_root:targetRootByName('quarantine'),target_label:$('quarantineLabel').value});
+$('futureUseBtn').onclick=()=>act('move_target',{target_root:targetRootByName('extras'),target_label:'future_use'});
 $('doneBtn').onclick=()=>act('mark_done',{note:'kept_as_is'});
 $('doneVisibleBtn').onclick=()=>actVisible('mark_done',{note:'visible_kept_as_is'});
 $('predictBtn').onclick=predict;
@@ -815,6 +820,15 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "move_class":
                     self.send_json(STORE.move_to_class(str(payload["item_id"]), str(payload["class_name"])))
                     return
+                if action == "move_target":
+                    self.send_json(
+                        STORE.move_to_target(
+                            str(payload["item_id"]),
+                            str(payload["target_root"]),
+                            str(payload["target_label"]),
+                        )
+                    )
+                    return
                 if action == "quarantine":
                     self.send_json(STORE.quarantine(str(payload["item_id"]), str(payload.get("label") or "manual_rejected")))
                     return
@@ -831,6 +845,12 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         if action == "move_class":
                             STORE.move_to_class(str(item_id), str(payload["class_name"]))
+                        elif action == "move_target":
+                            STORE.move_to_target(
+                                str(item_id),
+                                str(payload["target_root"]),
+                                str(payload["target_label"]),
+                            )
                         elif action == "quarantine":
                             STORE.quarantine(str(item_id), str(payload.get("label") or "manual_rejected"))
                         elif action == "mark_done":

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from canteen_checkout.config import CLASSIFICATION_DIR, DISH_CLASSES, DOWNLOADS_DIR, PROJECT_ROOT, REPORTS_DIR
+from canteen_checkout.config import CLASSIFICATION_DIR, DISH_CLASSES, DOWNLOADS_DIR, PROJECT_ROOT, REPORTS_DIR, REVIEWED_DIR
 from canteen_checkout.data_quality import assess_image, hamming_distance_hex, normalize_image
 from canteen_checkout.io_utils import IMAGE_EXTENSIONS
 
@@ -59,6 +59,8 @@ def latest_merge_processed() -> Path:
 
 
 def latest_external_reviewed() -> Path:
+    if REVIEWED_DIR.exists():
+        return REVIEWED_DIR
     root = DOWNLOADS_DIR / "external_staging"
     candidates = sorted(
         (p / "reviewed" for p in root.glob("external_*") if (p / "reviewed").is_dir()),
@@ -357,7 +359,13 @@ def main() -> None:
     parser.add_argument("--report", type=Path, default=REPORTS_DIR / "weighted_classification_dataset_report.csv")
     args = parser.parse_args()
 
-    old_source = args.old_source or latest_merge_processed()
+    if args.old_source is not None:
+        old_source = args.old_source
+    else:
+        try:
+            old_source = latest_merge_processed()
+        except FileNotFoundError:
+            old_source = PROJECT_ROOT / "data" / "archive" / "empty_old_source"
     reviewed_source = args.reviewed_source or latest_external_reviewed()
     specs = [
         SourceSpec("old", old_source, args.old_weight, priority=1),

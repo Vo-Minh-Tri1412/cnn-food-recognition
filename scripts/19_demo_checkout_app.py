@@ -37,6 +37,9 @@ from canteen_checkout.pricing import THIT_KHO_TRUNG_CLASS, dish_price
 
 
 UPLOAD_DIR = DEMO_TRAYS_DIR / "uploads"
+TEMPLATE_DIR = PROJECT_ROOT / "templates"
+STATIC_DIR = PROJECT_ROOT / "static"
+DEMO_TEMPLATE_PATH = TEMPLATE_DIR / "demo_checkout.html"
 IGNORE_LABELS = {"ignore", "ignored", "unknown", "other", "extra"}
 
 MODEL_CACHE: dict[str, object] = {}
@@ -93,7 +96,7 @@ def list_demo_images() -> list[dict[str, str]]:
 
 
 def list_region_templates() -> list[dict[str, str]]:
-    templates = [{"path": "", "name": "Auto 5 ô"}]
+    templates = [{"path": "", "name": "Auto 5 compartments"}]
     config_dir = PROJECT_ROOT / "configs"
     if config_dir.exists():
         for path in sorted(config_dir.glob("*regions*.json")):
@@ -265,430 +268,19 @@ def app_state() -> dict:
     }
 
 
-HTML = r"""<!doctype html>
-<html lang="vi">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Checkout Demo</title>
-  <style>
-    :root {
-      --bg: #f5f6f8;
-      --panel: #ffffff;
-      --ink: #1d232a;
-      --muted: #65717f;
-      --line: #d9dee5;
-      --accent: #126a5a;
-      --accent-2: #b8472f;
-      --warn: #a76500;
-      --ok: #087443;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--ink);
-      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    header {
-      height: 56px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 18px;
-      border-bottom: 1px solid var(--line);
-      background: #ffffff;
-    }
-    h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
-    main {
-      display: grid;
-      grid-template-columns: 330px minmax(420px, 1fr) 390px;
-      min-height: calc(100vh - 56px);
-    }
-    aside, section {
-      padding: 14px;
-      border-right: 1px solid var(--line);
-      overflow: auto;
-    }
-    section:last-child { border-right: 0; }
-    .group {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 12px;
-    }
-    .group h2 {
-      font-size: 13px;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin: 0 0 10px;
-      letter-spacing: 0.06em;
-    }
-    label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 4px; }
-    select, input, button {
-      width: 100%;
-      height: 34px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      background: #fff;
-      color: var(--ink);
-      padding: 0 9px;
-      font: inherit;
-    }
-    input[type="file"] { padding: 5px; }
-    button {
-      cursor: pointer;
-      background: #ffffff;
-      font-weight: 650;
-    }
-    button.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
-    button.danger { color: var(--accent-2); }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .toolbar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-    .stage {
-      display: grid;
-      grid-template-rows: auto minmax(360px, 1fr);
-      gap: 12px;
-    }
-    .image-wrap {
-      position: relative;
-      width: 100%;
-      max-height: calc(100vh - 168px);
-      overflow: auto;
-      background: #e8ecef;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-    }
-    .image-box {
-      position: relative;
-      display: inline-block;
-      min-width: 100%;
-      text-align: center;
-      padding: 10px;
-    }
-    #trayImage { max-width: 100%; height: auto; display: block; margin: 0 auto; }
-    .region {
-      position: absolute;
-      border: 2px solid var(--accent);
-      background: rgba(18, 106, 90, 0.14);
-      color: #fff;
-      text-shadow: 0 1px 2px rgba(0,0,0,.45);
-      font-size: 12px;
-      font-weight: 700;
-      display: flex;
-      align-items: flex-start;
-      padding: 4px;
-      cursor: move;
-      min-width: 24px;
-      min-height: 24px;
-    }
-    .region.selected { border-color: var(--accent-2); background: rgba(184, 71, 47, 0.16); }
-    .region.ignored { border-style: dashed; border-color: #5f6872; background: rgba(95,104,114,.16); }
-    .region::after {
-      content: "";
-      position: absolute;
-      width: 12px;
-      height: 12px;
-      right: -7px;
-      bottom: -7px;
-      border-radius: 50%;
-      background: #fff;
-      border: 2px solid currentColor;
-      cursor: nwse-resize;
-    }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { border-bottom: 1px solid var(--line); padding: 7px 5px; text-align: left; vertical-align: middle; }
-    th { color: var(--muted); font-size: 12px; font-weight: 700; }
-    td input, td select { height: 30px; min-width: 0; }
-    .small { color: var(--muted); font-size: 12px; }
-    .bill-item {
-      display: grid;
-      grid-template-columns: 72px 1fr;
-      gap: 10px;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--line);
-    }
-    .bill-item img {
-      width: 72px;
-      height: 72px;
-      object-fit: cover;
-      border-radius: 6px;
-      border: 1px solid var(--line);
-    }
-    .pill {
-      display: inline-block;
-      padding: 2px 7px;
-      border-radius: 999px;
-      background: #eef1f4;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
-      margin-left: 5px;
-    }
-    .pill.warn { color: var(--warn); background: #fff2d6; }
-    .pill.ok { color: var(--ok); background: #dff5e9; }
-    .total {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      font-size: 20px;
-      font-weight: 800;
-      margin-top: 12px;
-    }
-    .status { color: var(--muted); }
-    @media (max-width: 1100px) {
-      main { grid-template-columns: 1fr; }
-      aside, section { border-right: 0; border-bottom: 1px solid var(--line); }
-    }
-  </style>
-</head>
-<body>
-  <header>
-    <h1>Checkout the Canteen</h1>
-    <div class="status" id="status">Ready</div>
-  </header>
-  <main>
-    <aside>
-      <div class="group">
-        <h2>Ảnh</h2>
-        <label for="imageSelect">Ảnh demo</label>
-        <select id="imageSelect"></select>
-        <label for="uploadInput">Upload</label>
-        <input id="uploadInput" type="file" accept="image/*">
-        <div class="row">
-          <button id="reloadBtn">Reload</button>
-          <button id="loadImageBtn">Load</button>
-        </div>
-      </div>
-      <div class="group">
-        <h2>Crop</h2>
-        <label for="templateSelect">Template</label>
-        <select id="templateSelect"></select>
-        <div class="toolbar">
-          <button id="applyTemplateBtn">Apply</button>
-          <button id="addRegionBtn">Add</button>
-          <button id="deleteRegionBtn" class="danger">Delete</button>
-        </div>
-      </div>
-      <div class="group">
-        <h2>Model</h2>
-        <label for="thresholdInput">Threshold</label>
-        <input id="thresholdInput" type="number" min="0" max="1" step="0.01" value="0.55">
-        <label for="eggCountInput">Egg count</label>
-        <input id="eggCountInput" type="number" min="1" step="1" value="1">
-        <button id="runBtn" class="primary">Run checkout</button>
-      </div>
-    </aside>
-    <section class="stage">
-      <div class="group">
-        <h2>Vùng crop</h2>
-        <table>
-          <thead><tr><th>Name</th><th>Label</th><th>X</th><th>Y</th><th>W</th><th>H</th></tr></thead>
-          <tbody id="regionRows"></tbody>
-        </table>
-      </div>
-      <div class="image-wrap">
-        <div class="image-box" id="imageBox">
-          <img id="trayImage" alt="">
-        </div>
-      </div>
-    </section>
-    <section>
-      <div class="group">
-        <h2>Hóa đơn</h2>
-        <div id="billList" class="small">Chưa chạy demo.</div>
-        <div class="total"><span>Total</span><span id="totalValue">0 VND</span></div>
-      </div>
-      <div class="group">
-        <h2>JSON</h2>
-        <pre id="billJson" class="small"></pre>
-      </div>
-    </section>
-  </main>
-  <script>
-    const state = { app: null, imagePath: "", imageWidth: 0, imageHeight: 0, regions: [], selected: -1, dragging: null };
-    const $ = (id) => document.getElementById(id);
-    const fmt = (n) => `${Number(n || 0).toLocaleString("en-US")} VND`;
-    const setStatus = (text) => $("status").textContent = text;
 
-    async function api(path, body=null) {
-      const options = body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : {};
-      const res = await fetch(path, options);
-      const data = await res.json();
-      if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
-      return data;
-    }
+def load_demo_template() -> str:
+    if not DEMO_TEMPLATE_PATH.exists():
+        raise FileNotFoundError(f"Demo template not found: {DEMO_TEMPLATE_PATH}")
+    return DEMO_TEMPLATE_PATH.read_text(encoding="utf-8")
 
-    async function loadState() {
-      const data = await api("/api/state");
-      state.app = data;
-      $("imageSelect").innerHTML = data.images.map(x => `<option value="${x.path}">${x.name}</option>`).join("");
-      $("templateSelect").innerHTML = data.templates.map(x => `<option value="${x.path}">${x.name}</option>`).join("");
-      if (data.images.length && !state.imagePath) {
-        state.imagePath = data.images[0].path;
-        $("imageSelect").value = state.imagePath;
-        await loadImage(state.imagePath);
-      }
-    }
 
-    async function loadImage(path) {
-      state.imagePath = path;
-      const meta = await api(`/api/image-info?path=${encodeURIComponent(path)}`);
-      state.imageWidth = meta.width;
-      state.imageHeight = meta.height;
-      $("trayImage").src = `/file?path=${encodeURIComponent(path)}&t=${Date.now()}`;
-      await applyTemplate();
-      setStatus(path);
-    }
-
-    function scaleInfo() {
-      const img = $("trayImage");
-      const box = $("imageBox");
-      const rendered = img.getBoundingClientRect();
-      const outer = box.getBoundingClientRect();
-      const sx = rendered.width / state.imageWidth;
-      const sy = rendered.height / state.imageHeight;
-      return { sx, sy, ox: rendered.left - outer.left, oy: rendered.top - outer.top };
-    }
-
-    function renderRegions() {
-      const labels = state.app.labels.map(x => `<option value="${x}">${x || "model"}</option>`).join("");
-      $("regionRows").innerHTML = state.regions.map((r, i) => `
-        <tr data-i="${i}">
-          <td><input data-k="name" value="${r.name || ""}"></td>
-          <td><select data-k="label">${labels}</select></td>
-          <td><input data-k="x" type="number" value="${r.x}"></td>
-          <td><input data-k="y" type="number" value="${r.y}"></td>
-          <td><input data-k="w" type="number" value="${r.w}"></td>
-          <td><input data-k="h" type="number" value="${r.h}"></td>
-        </tr>`).join("");
-      [...$("regionRows").querySelectorAll("tr")].forEach((tr) => {
-        const i = Number(tr.dataset.i);
-        tr.querySelector("select").value = state.regions[i].label || "";
-        tr.onclick = () => { state.selected = i; drawOverlay(); };
-        tr.querySelectorAll("input,select").forEach((el) => {
-          el.oninput = () => {
-            const k = el.dataset.k;
-            state.regions[i][k] = ["x","y","w","h"].includes(k) ? Number(el.value || 0) : el.value;
-            drawOverlay(false);
-          };
-        });
-      });
-      drawOverlay(false);
-    }
-
-    function drawOverlay(syncRows=true) {
-      const box = $("imageBox");
-      [...box.querySelectorAll(".region")].forEach(x => x.remove());
-      const {sx, sy, ox, oy} = scaleInfo();
-      state.regions.forEach((r, i) => {
-        const div = document.createElement("div");
-        div.className = `region ${i === state.selected ? "selected" : ""} ${r.label === "ignore" ? "ignored" : ""}`;
-        div.style.left = `${ox + r.x * sx}px`;
-        div.style.top = `${oy + r.y * sy}px`;
-        div.style.width = `${r.w * sx}px`;
-        div.style.height = `${r.h * sy}px`;
-        div.textContent = r.label || r.name || `crop_${i}`;
-        div.onpointerdown = (e) => {
-          state.selected = i;
-          const rect = div.getBoundingClientRect();
-          const resize = e.clientX > rect.right - 16 && e.clientY > rect.bottom - 16;
-          state.dragging = { i, resize, x:e.clientX, y:e.clientY, r:{...r} };
-          div.setPointerCapture(e.pointerId);
-          drawOverlay(false);
-        };
-        div.onpointermove = (e) => {
-          const d = state.dragging;
-          if (!d || d.i !== i) return;
-          const dx = (e.clientX - d.x) / sx;
-          const dy = (e.clientY - d.y) / sy;
-          if (d.resize) {
-            r.w = Math.max(8, Math.round(d.r.w + dx));
-            r.h = Math.max(8, Math.round(d.r.h + dy));
-          } else {
-            r.x = Math.max(0, Math.min(state.imageWidth - 1, Math.round(d.r.x + dx)));
-            r.y = Math.max(0, Math.min(state.imageHeight - 1, Math.round(d.r.y + dy)));
-          }
-          drawOverlay();
-        };
-        div.onpointerup = () => { state.dragging = null; renderRegions(); };
-        box.appendChild(div);
-      });
-      if (syncRows) renderRegions();
-    }
-
-    async function applyTemplate() {
-      const template = $("templateSelect").value;
-      const payload = { image_path: state.imagePath, template };
-      const data = await api("/api/regions", payload);
-      state.regions = data.regions;
-      state.selected = state.regions.length ? 0 : -1;
-      renderRegions();
-    }
-
-    async function runCheckout() {
-      setStatus("Running...");
-      const payload = {
-        image_path: state.imagePath,
-        regions: state.regions,
-        threshold: Number($("thresholdInput").value || 0.55),
-        egg_count: Number($("eggCountInput").value || 1),
-      };
-      const bill = await api("/api/run", payload);
-      $("totalValue").textContent = fmt(bill.total_vnd);
-      $("billList").innerHTML = bill.items.map((item, idx) => `
-        <div class="bill-item">
-          <img src="${item.crop_url}">
-          <div>
-            <strong>${idx + 1}. ${item.display_name}</strong>
-            ${item.ignored ? '<span class="pill">ignored</span>' : item.uncertain ? '<span class="pill warn">uncertain</span>' : '<span class="pill ok">ok</span>'}
-            <div>${fmt(item.price_vnd)} · conf=${Number(item.confidence).toFixed(2)}</div>
-            <div class="small">${item.region_name} · ${item.class_name}</div>
-          </div>
-        </div>`).join("");
-      $("billJson").textContent = JSON.stringify(bill, null, 2);
-      setStatus(`Bill: ${bill.bill_path}`);
-    }
-
-    $("reloadBtn").onclick = loadState;
-    $("loadImageBtn").onclick = () => loadImage($("imageSelect").value);
-    $("imageSelect").onchange = () => loadImage($("imageSelect").value);
-    $("applyTemplateBtn").onclick = applyTemplate;
-    $("addRegionBtn").onclick = () => {
-      state.regions.push({name:`crop_${state.regions.length}`, x:20, y:20, w:160, h:120, label:""});
-      state.selected = state.regions.length - 1;
-      renderRegions();
-    };
-    $("deleteRegionBtn").onclick = () => {
-      if (state.selected >= 0) state.regions.splice(state.selected, 1);
-      state.selected = Math.min(state.selected, state.regions.length - 1);
-      renderRegions();
-    };
-    $("runBtn").onclick = () => runCheckout().catch(err => { setStatus(err.message); alert(err.message); });
-    $("uploadInput").onchange = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const saved = await api("/api/upload", { name: file.name, data_url: reader.result });
-        await loadState();
-        $("imageSelect").value = saved.path;
-        await loadImage(saved.path);
-      };
-      reader.readAsDataURL(file);
-    };
-    $("trayImage").onload = () => drawOverlay(false);
-    window.addEventListener("resize", () => drawOverlay(false));
-    loadState().catch(err => { setStatus(err.message); alert(err.message); });
-  </script>
-</body>
-</html>
-"""
+def is_safe_static_path(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(STATIC_DIR.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 class DemoHandler(BaseHTTPRequestHandler):
@@ -714,12 +306,26 @@ class DemoHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/":
-                body = HTML.encode("utf-8")
+                body = load_demo_template().encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if parsed.path.startswith("/static/"):
+                static_name = parsed.path.removeprefix("/static/")
+                path = (STATIC_DIR / static_name).resolve()
+                if not path.exists() or not path.is_file() or not is_safe_static_path(path):
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(path.stat().st_size))
+                self.end_headers()
+                with path.open("rb") as f:
+                    shutil.copyfileobj(f, self.wfile)
                 return
             if parsed.path == "/api/state":
                 self.send_json(app_state())

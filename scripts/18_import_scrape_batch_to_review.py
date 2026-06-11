@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from canteen_checkout.config import DISH_CLASSES, DOWNLOADS_DIR, PROJECT_ROOT
+from canteen_checkout.config import DATA_DIR, DISH_CLASSES, DOWNLOADS_DIR, PROJECT_ROOT, REPORTS_DIR, REVIEW_INBOX_DIR, REVIEWED_DIR
 from canteen_checkout.data_quality import assess_image, hamming_distance_hex, normalize_image, quality_reasons
 from canteen_checkout.io_utils import IMAGE_EXTENSIONS
 
@@ -155,14 +155,20 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    staging = args.staging or latest_external_staging()
     source_name = args.source_name or args.source.name
-    out_dir = staging / "reviewed" / args.class_name if args.target == "reviewed" else staging / "review" / args.pool
-    rejected_dir = staging / "rejected" / "scrape_batch" / args.pool
-    manifest_path = staging / "reports" / "external_import_manifest.csv"
+    if args.staging:
+        staging = args.staging
+        out_dir = staging / "reviewed" / args.class_name if args.target == "reviewed" else staging / "review" / args.pool
+        rejected_dir = staging / "rejected" / "scrape_batch" / args.pool
+        manifest_path = staging / "reports" / "external_import_manifest.csv"
+    else:
+        staging = PROJECT_ROOT / "data"
+        out_dir = REVIEWED_DIR / args.class_name if args.target == "reviewed" else REVIEW_INBOX_DIR / args.pool
+        rejected_dir = DATA_DIR / "quarantine" / "rejected" / "scrape_batch" / args.pool
+        manifest_path = REPORTS_DIR / "external_import_manifest.csv"
 
     reference_roots = list(args.dedupe_against)
-    reference_roots.extend([staging / "reviewed", staging / "review" / args.pool, out_dir])
+    reference_roots.extend([REVIEWED_DIR, REVIEW_INBOX_DIR / args.pool, out_dir])
     seen_phashes = load_reference_phashes(reference_roots)
     rows: list[dict[str, str]] = []
     counts: Counter = Counter()

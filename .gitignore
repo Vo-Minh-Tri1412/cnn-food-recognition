@@ -8,6 +8,10 @@ models/*.onnx
 outputs/
 data/raw_teacher_trays/
 data/demo_trays/
+data/demo/
+data/inbox/
+data/reviewed/
+data/extras/
 data/classification/
 data/downloads/
 data/scraped_candidates/

@@ -4,11 +4,12 @@ Local-first canteen checkout project for 11 HCMUS canteen dishes.
 
 The current workflow is:
 
-1. collect/import candidate food images into isolated review folders;
+1. collect/import candidate food images into `data/inbox/review`;
 2. review and clean data in the Data IDE;
-3. rebuild `data/classification/{train,val,test}`;
-4. train the dish classifier;
-5. demo tray checkout with crop regions, ignore regions, prices, and bill JSON.
+3. keep only trusted images in `data/reviewed/<class>`;
+4. regenerate `data/classification/{train,val,test}` from `data/reviewed`;
+5. train the dish classifier;
+6. demo tray checkout with crop regions, ignore regions, prices, and bill JSON.
 
 ## Environment
 
@@ -20,17 +21,19 @@ Use the local virtual environment:
 
 Main dependencies are PyTorch, torchvision, OpenCV, Pillow, pandas, scikit-learn, matplotlib, tqdm, and Jupyter.
 
-## Core Folders
+## Core Data Tree
 
 ```text
-data/classification/                         # final train/val/test dataset
-data/downloads/external_staging/external_*/  # imported public/Roboflow datasets
-data/downloads/scrape_batches/               # raw web crawl batches
-data/quarantine/                             # rejected or future-use images from Data IDE
-models/dish_classifier.pt                    # trained model
-models/class_names.json                      # class order
-outputs/reports/                             # training/audit/action reports
+data/inbox/review/          # images waiting for human review
+data/reviewed/<class>/      # trusted pool used to build training data
+data/extras/<label>/        # useful non-target labels, background, future use
+data/quarantine/<reason>/   # rejected, duplicates, and label conflicts
+data/classification/        # generated train/val/test dataset
+data/demo/                  # demo tray images and uploads
+data/archive/               # legacy/raw/frozen data
 ```
+
+`data/classification` is generated output. Do not treat it as the long-term source of truth; rebuild it from `data/reviewed` when data changes.
 
 Large data, model weights, and outputs are intentionally ignored by Git.
 
@@ -54,7 +57,7 @@ Prices live in `prices.csv`. For `thit_kho_trung`, one egg is included in the ba
 
 ## Data IDE
 
-This is the main review and data-management UI:
+Start the review and data-management UI:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\21_data_ide.py --host 127.0.0.1 --port 7862
@@ -62,10 +65,23 @@ This is the main review and data-management UI:
 
 Open [http://127.0.0.1:7862](http://127.0.0.1:7862).
 
-Root behavior:
+Source roots:
 
-- `classification`: shows `split` and `class` filters.
-- `external_review`, `external_reviewed`, `quarantine`: show direct `Folder / pool` filters.
+- `inbox_review`: new images waiting for review.
+- `reviewed`: trusted images already accepted.
+- `extras`: non-target labels such as background or future-use classes.
+- `quarantine`: rejected, duplicate, or conflict images.
+- `classification`: generated train/val/test dataset for inspection.
+- `data_workspace`: any image folder under `data`.
+
+Target roots:
+
+- `reviewed`: accepted target-class images.
+- `inbox_review`: put images back into review.
+- `extras`: useful images outside the 11-class task.
+- `quarantine`: rejected, duplicate, or uncertain images.
+
+The IDE now lets you choose a source folder and a target root/label directly. After move, quarantine, future-use, or mark-done actions, processed images leave the current queue.
 
 Useful shortcuts:
 
@@ -73,37 +89,58 @@ Useful shortcuts:
 - `A`: select the current row.
 - `Space`: next row.
 - `Shift+Space`: previous row.
-- `Enter`: move selected images to the target class.
+- `Enter`: move selected images to the chosen target root/label.
 - `Q`: quarantine selected images.
-- `F`: move selected images to future-use quarantine.
+- `F`: move selected images to an extra/future-use label.
 - `P`: run the current model on visible images.
 - `Esc`: clear selection.
 
-After move/quarantine/future-use, the queue refreshes and processed images leave the current folder.
+## Dedupe Reviewed
 
-## Import External Datasets
-
-Put downloaded datasets under `data/downloads/`, then run:
+Dry-run first:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\14_import_external_datasets.py
+.\.venv\Scripts\python.exe scripts\26_dedupe_reviewed.py --root data\reviewed
 ```
 
-This creates review pools under:
+Apply safe quarantine:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\26_dedupe_reviewed.py --root data\reviewed --apply
+```
+
+Policy:
+
+- exact duplicate in the same class: keep one canonical file, quarantine the rest;
+- exact or near duplicate across classes: quarantine the conflict group;
+- near duplicate in the same class: threshold `8`;
+- cross-class conflict: threshold `4`.
+
+Reports are written to `outputs/reports`.
+
+## Import And Review New Data
+
+Put new raw images anywhere under `data/inbox`, for example:
 
 ```text
-data/downloads/external_staging/external_<timestamp>/review/
+data/inbox/raw_batches/my_new_batch/raw/
 ```
 
-Use the Data IDE to move correct images into:
+Normalize/import a batch into the review queue:
 
-```text
-data/downloads/external_staging/external_<timestamp>/reviewed/<class_name>/
+```powershell
+.\.venv\Scripts\python.exe scripts\18_import_scrape_batch_to_review.py `
+  --source data\inbox\raw_batches\my_new_batch\raw `
+  --class-name rau_xao `
+  --pool rau_xao_my_new_batch `
+  --target review `
+  --dedupe-against data\reviewed `
+  --dedupe-against data\classification
 ```
 
-Ambiguous pools such as `protein_grid_review`, `unknown_food_crops`, `canh_chua_unknown`, or `thit_kho_or_thit_kho_trung` must be reviewed before training.
+Correct images should be moved in the Data IDE into `data/reviewed/<class>`. Ambiguous images should go to `data/extras/<label>` or `data/quarantine/<reason>`.
 
-## Search and Crawl
+## Search And Crawl
 
 Search public dataset links before crawling individual images:
 
@@ -117,39 +154,32 @@ Crawl image candidates only into raw batch folders:
 .\.venv\Scripts\python.exe scripts\09_collect_web_images.py `
   --queries configs\green_vegetable_extra_queries.csv `
   --provider mixed `
-  --out data\downloads\scrape_batches\new_batch\raw `
-  --manifest data\downloads\scrape_batches\new_batch\scraped_manifest.csv `
+  --out data\inbox\raw_batches\green_vegetable_batch\raw `
+  --manifest outputs\reports\green_vegetable_batch_manifest.csv `
   --per-query 80 `
   --max-downloads-per-class 300 `
+  --dedupe-against data\reviewed `
   --dedupe-against data\classification `
-  --dedupe-against data\downloads `
   --phash-threshold 6
 ```
 
-Normalize/import a crawl batch into a review pool:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\18_import_scrape_batch_to_review.py `
-  --source data\downloads\scrape_batches\new_batch\raw `
-  --class-name rau_xao `
-  --pool rau_xao_new_batch `
-  --target review `
-  --dedupe-against data\classification
-```
+Never crawl directly into `data/reviewed` or `data/classification`.
 
 ## Build Training Dataset
 
-Rebuild `data/classification` from curated old data and reviewed external data:
+Rebuild `data/classification` from trusted reviewed data:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\17_build_weighted_classification_dataset.py `
+  --reviewed-source data\reviewed `
   --old-weight 1 `
   --reviewed-weight 1 `
   --cross-class-hamming 4 `
-  --clear
+  --clear `
+  --clear-all
 ```
 
-Current policy: `old` and `reviewed` are trusted equally. Cross-class duplicates are skipped and reported.
+Current policy: all trusted reviewed images have equal weight. Cross-class duplicates are skipped and reported.
 
 Audit the final dataset:
 
@@ -191,16 +221,24 @@ Browser demo:
 
 Open [http://127.0.0.1:7861](http://127.0.0.1:7861).
 
+Demo frontend files:
+
+```text
+templates/demo_checkout.html
+static/demo_checkout.css
+static/demo_checkout.js
+```
+
 CLI demo:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\06_demo_checkout.py --image data\demo_trays\YOUR_IMAGE.jpg
+.\.venv\Scripts\python.exe scripts\06_demo_checkout.py --image data\demo\YOUR_IMAGE.jpg
 ```
 
 Manual crop helper:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\04_crop_tray.py --image data\demo_trays\YOUR_IMAGE.jpg --interactive --save-regions configs\my_regions.json
+.\.venv\Scripts\python.exe scripts\04_crop_tray.py --image data\demo\YOUR_IMAGE.jpg --interactive --save-regions configs\my_regions.json
 ```
 
 ## Notebook

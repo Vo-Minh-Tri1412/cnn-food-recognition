@@ -6,8 +6,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DATA_DIR = PROJECT_ROOT / "data"
+INBOX_DIR = DATA_DIR / "inbox"
+REVIEW_INBOX_DIR = INBOX_DIR / "review"
+REVIEWED_DIR = DATA_DIR / "reviewed"
+EXTRAS_DIR = DATA_DIR / "extras"
 RAW_TEACHER_TRAYS_DIR = DATA_DIR / "raw_teacher_trays"
-DEMO_TRAYS_DIR = DATA_DIR / "demo_trays"
+DEMO_TRAYS_DIR = DATA_DIR / "demo"
 CLASSIFICATION_DIR = DATA_DIR / "classification"
 DOWNLOADS_DIR = DATA_DIR / "downloads"
 SCRAPED_CANDIDATES_DIR = DATA_DIR / "scraped_candidates"
