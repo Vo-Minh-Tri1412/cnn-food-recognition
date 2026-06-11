@@ -235,6 +235,23 @@ Recommended local training command:
   --label-smoothing 0.05
 ```
 
+Supported `--arch` choices:
+
+```text
+mobilenet_v3_small
+mobilenet_v3_large
+efficientnet_b0
+efficientnet_b1
+efficientnet_b2
+efficientnet_b3
+resnet18
+resnet50
+convnext_tiny
+```
+
+For Colab GPU, start with `efficientnet_b2`. If it runs out of memory, use
+`efficientnet_b0` or reduce `--batch-size` to `4`.
+
 Outputs:
 
 ```text

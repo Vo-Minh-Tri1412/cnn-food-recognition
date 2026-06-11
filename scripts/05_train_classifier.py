@@ -23,7 +23,15 @@ from tqdm import tqdm
 
 from canteen_checkout.config import CLASSIFICATION_DIR, DEFAULT_MODEL_PATH, DISH_CLASSES, REPORTS_DIR
 from canteen_checkout.io_utils import IMAGE_EXTENSIONS, save_class_names
-from canteen_checkout.model import build_classifier, eval_transforms, load_checkpoint, resolve_device, save_checkpoint, train_transforms
+from canteen_checkout.model import (
+    SUPPORTED_ARCHES,
+    build_classifier,
+    eval_transforms,
+    load_checkpoint,
+    resolve_device,
+    save_checkpoint,
+    train_transforms,
+)
 
 
 class FixedClassImageDataset(Dataset):
@@ -129,7 +137,7 @@ def main() -> None:
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--arch", choices=["mobilenet_v3_small", "efficientnet_b0"], default="mobilenet_v3_small")
+    parser.add_argument("--arch", choices=SUPPORTED_ARCHES, default="mobilenet_v3_small")
     parser.add_argument("--no-weighted-loss", action="store_true", help="Disable class-balanced loss weights.")
     parser.add_argument("--label-smoothing", type=float, default=0.0)
     parser.add_argument("--no-pretrained", action="store_true")

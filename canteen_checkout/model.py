@@ -4,21 +4,69 @@ import torch
 from torch import nn
 from torchvision import models, transforms
 
+SUPPORTED_ARCHES = (
+    "mobilenet_v3_small",
+    "mobilenet_v3_large",
+    "efficientnet_b0",
+    "efficientnet_b1",
+    "efficientnet_b2",
+    "efficientnet_b3",
+    "resnet18",
+    "resnet50",
+    "convnext_tiny",
+)
+
+
+def _replace_classifier_tail(model: nn.Module, num_classes: int) -> nn.Module:
+    in_features = model.classifier[-1].in_features
+    model.classifier[-1] = nn.Linear(in_features, num_classes)
+    return model
+
+
+def _replace_resnet_head(model: nn.Module, num_classes: int) -> nn.Module:
+    in_features = model.fc.in_features
+    model.fc = nn.Linear(in_features, num_classes)
+    return model
+
 
 def build_classifier(num_classes: int, pretrained: bool = True, arch: str = "mobilenet_v3_small") -> nn.Module:
     if arch == "mobilenet_v3_small":
         weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
         model = models.mobilenet_v3_small(weights=weights)
-        in_features = model.classifier[-1].in_features
-        model.classifier[-1] = nn.Linear(in_features, num_classes)
-        return model
+        return _replace_classifier_tail(model, num_classes)
+    if arch == "mobilenet_v3_large":
+        weights = models.MobileNet_V3_Large_Weights.DEFAULT if pretrained else None
+        model = models.mobilenet_v3_large(weights=weights)
+        return _replace_classifier_tail(model, num_classes)
     if arch == "efficientnet_b0":
         weights = models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
         model = models.efficientnet_b0(weights=weights)
-        in_features = model.classifier[-1].in_features
-        model.classifier[-1] = nn.Linear(in_features, num_classes)
-        return model
-    raise ValueError(f"Unsupported architecture: {arch}")
+        return _replace_classifier_tail(model, num_classes)
+    if arch == "efficientnet_b1":
+        weights = models.EfficientNet_B1_Weights.DEFAULT if pretrained else None
+        model = models.efficientnet_b1(weights=weights)
+        return _replace_classifier_tail(model, num_classes)
+    if arch == "efficientnet_b2":
+        weights = models.EfficientNet_B2_Weights.DEFAULT if pretrained else None
+        model = models.efficientnet_b2(weights=weights)
+        return _replace_classifier_tail(model, num_classes)
+    if arch == "efficientnet_b3":
+        weights = models.EfficientNet_B3_Weights.DEFAULT if pretrained else None
+        model = models.efficientnet_b3(weights=weights)
+        return _replace_classifier_tail(model, num_classes)
+    if arch == "resnet18":
+        weights = models.ResNet18_Weights.DEFAULT if pretrained else None
+        model = models.resnet18(weights=weights)
+        return _replace_resnet_head(model, num_classes)
+    if arch == "resnet50":
+        weights = models.ResNet50_Weights.DEFAULT if pretrained else None
+        model = models.resnet50(weights=weights)
+        return _replace_resnet_head(model, num_classes)
+    if arch == "convnext_tiny":
+        weights = models.ConvNeXt_Tiny_Weights.DEFAULT if pretrained else None
+        model = models.convnext_tiny(weights=weights)
+        return _replace_classifier_tail(model, num_classes)
+    raise ValueError(f"Unsupported architecture: {arch}. Supported: {', '.join(SUPPORTED_ARCHES)}")
 
 
 def train_transforms(image_size: int = 224) -> transforms.Compose:
