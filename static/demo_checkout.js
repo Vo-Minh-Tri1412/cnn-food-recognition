@@ -486,7 +486,8 @@ function renderBill(bill) {
       ? `${item.raw_class_name} → ${item.class_name}`
       : item.class_name;
     const evidence = [];
-    if (Number(item.egg_count || 0) > 0) evidence.push(`egg=${item.egg_count}`);
+    const detectorEgg = Number(item.detector_evidence?.egg_count || 0);
+    if (detectorEgg > 0) evidence.push(`egg=${detectorEgg}`);
     if (Number(item.fish_count || 0) > 0) evidence.push(`fish=${item.fish_count}`);
     if (item.fusion_reason && item.fusion_reason !== "classifier_only") evidence.push(item.fusion_reason);
     const tag = item.ignored
@@ -520,14 +521,12 @@ async function runCheckout() {
   setStatus("Running checkout...");
   try {
     const thresholdInput = $("thresholdInput");
-    const eggCountInput = $("eggCountInput");
     const bill = await api("/api/run", {
       image_path: state.imagePath,
       regions: state.regions,
       threshold: thresholdInput ? Number(thresholdInput.value || 0.55) : 0.55,
       use_detector: true,
       detector_threshold: 0.25,
-      egg_count: eggCountInput ? Number(eggCountInput.value || 1) : 1,
     });
     renderBill(bill);
     setStatus(`✅ Đã nhận diện xong!`);

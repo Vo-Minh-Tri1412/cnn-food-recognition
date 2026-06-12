@@ -136,7 +136,6 @@ def fuse_decision(
     raw_confidence: float,
     uncertain: bool,
     evidence: DetectorEvidence,
-    manual_egg_count: int = 1,
 ) -> FusionResult:
     final_class = raw_class_name
     final_confidence = raw_confidence
@@ -153,7 +152,7 @@ def fuse_decision(
             final_egg_count = evidence.egg_count
             fusion_reason = "detector_found_egg"
         elif raw_class_name == "thit_kho_trung":
-            final_egg_count = max(1, manual_egg_count)
+            final_egg_count = 1
             fusion_reason = "classifier_thit_kho_trung_no_detector_egg"
         else:
             fusion_reason = "classifier_thit_kho_no_detector_egg"
@@ -170,7 +169,7 @@ def fuse_decision(
             fusion_reason = "classifier_co_ca_no_detector_fish"
 
     if final_class == "thit_kho_trung" and final_egg_count is None:
-        final_egg_count = max(1, manual_egg_count)
+        final_egg_count = 1
 
     return FusionResult(
         class_name=final_class,

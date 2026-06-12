@@ -172,7 +172,6 @@ def run_checkout(payload: dict) -> dict:
     use_detector = bool(payload.get("use_detector", True))
     detector_threshold = float(payload.get("detector_threshold", 0.25))
     threshold = float(payload.get("threshold", 0.55))
-    egg_count = int(payload.get("egg_count", 1))
     regions = regions_from_payload(payload, image_path)
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
@@ -219,7 +218,7 @@ def run_checkout(payload: dict) -> dict:
         raw_confidence = confidence
         evidence = empty_evidence(detector_path, detector_loaded)
         fusion_reason = "classifier_only"
-        final_egg_count = egg_count if class_name == THIT_KHO_TRUNG_CLASS else None
+        final_egg_count = 1 if class_name == THIT_KHO_TRUNG_CLASS else None
         if detector is not None and not ignored and not forced_label:
             evidence = detect_objects(detector, crop_path, detector_path=detector_path, confidence=detector_threshold)
             fusion = fuse_decision(
@@ -227,7 +226,6 @@ def run_checkout(payload: dict) -> dict:
                 raw_confidence=raw_confidence,
                 uncertain=uncertain,
                 evidence=evidence,
-                manual_egg_count=egg_count,
             )
             class_name = fusion.class_name
             confidence = fusion.confidence

@@ -239,6 +239,49 @@ Kaggle:
 /kaggle/input/<your-dataset>/classification.zip
 ```
 
+## Google Drive Desktop Sync
+
+If Google Drive for desktop is installed, this project can sync artifacts through the local Drive mount. On this machine the detected default is:
+
+```text
+G:\My Drive\canteen_checkout
+```
+
+Check what local and Drive artifacts exist:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\32_sync_drive_artifacts.py --status
+```
+
+Before training on Colab, push local packaged datasets to Drive:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\32_sync_drive_artifacts.py --push-packages --apply
+```
+
+After Colab finishes training and saves artifacts to Drive, pull the canonical models back to local:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\32_sync_drive_artifacts.py --pull-models --apply
+```
+
+To also copy the newest Drive run folder into `outputs/cloud/drive_runs/` for local report reading:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\32_sync_drive_artifacts.py --pull-models --pull-latest-run --apply
+```
+
+If Drive is mounted somewhere else, pass the root explicitly:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\32_sync_drive_artifacts.py `
+  --drive-root "G:\My Drive\canteen_checkout" `
+  --pull-models `
+  --apply
+```
+
+Without `--apply`, the script is a dry-run and only prints the planned copy actions.
+
 ## YOLO Egg/Fish Detector
 
 The dish classifier remains the main model. The YOLO detector is an auxiliary model for two hard decisions:

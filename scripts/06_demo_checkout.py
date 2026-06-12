@@ -41,7 +41,6 @@ def main() -> None:
     parser.add_argument("--regions-json", type=Path, default=None)
     parser.add_argument("--threshold", type=float, default=0.45)
     parser.add_argument("--ignore-region", action="append", default=[], help="Region name to crop but exclude from billing. Can be repeated.")
-    parser.add_argument("--egg-count", type=int, default=1, help="Egg count to charge for thit_kho_trung predictions.")
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args()
 
@@ -108,7 +107,7 @@ def main() -> None:
         raw_confidence = confidence
         evidence = empty_evidence(args.detector, detector_loaded)
         fusion_reason = "classifier_only"
-        final_egg_count = args.egg_count if class_name == THIT_KHO_TRUNG_CLASS else None
+        final_egg_count = 1 if class_name == THIT_KHO_TRUNG_CLASS else None
         if detector is not None and not ignored and not forced_label:
             evidence = detect_objects(detector, crop_path, detector_path=args.detector, confidence=args.detector_threshold)
             fusion = fuse_decision(
@@ -116,7 +115,6 @@ def main() -> None:
                 raw_confidence=raw_confidence,
                 uncertain=uncertain,
                 evidence=evidence,
-                manual_egg_count=args.egg_count,
             )
             class_name = fusion.class_name
             confidence = fusion.confidence
@@ -174,7 +172,7 @@ def main() -> None:
     print("Detected dishes:")
     for idx, item in enumerate(items, 1):
         marker = " (ignored)" if item["ignored"] else " (uncertain)" if item["uncertain"] else ""
-        egg_note = f", eggs={item['egg_count']}" if item["egg_count"] is not None else ""
+        egg_note = f", eggs={item['egg_count']}" if item["egg_count"] and item["egg_count"] > 1 else ""
         print(
             f"{idx}. {item['display_name']} - {item['price_vnd']:,} VND "
             f"- conf={item['confidence']:.2f}{egg_note}{marker}"
