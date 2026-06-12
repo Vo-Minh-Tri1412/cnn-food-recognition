@@ -28,9 +28,10 @@ Cloud workflow entrypoint:
 01_colab_demo_checkout.ipynb
 02_colab_gradcam_debug.ipynb
 03_colab_read_reports.ipynb
+04_colab_train_yolo_detector.ipynb
 ```
 
-Open these notebooks from GitHub in Google Colab or upload/import them into Kaggle. The `00` notebook is designed to clone this repo, find a packaged dataset, train, and save model/report artifacts. The other notebooks are smaller control panels for demo inference, Grad-CAM, and reading training reports.
+Open these notebooks from GitHub in Google Colab or upload/import them into Kaggle. The `00` notebook is designed to clone this repo, find a packaged dataset, train, and save model/report artifacts. The other notebooks are smaller control panels for demo inference, Grad-CAM, reading training reports, and YOLO detector training.
 
 ## Core Data Tree
 
@@ -106,6 +107,8 @@ Useful shortcuts:
 - `P`: run the current model on visible images.
 - `Esc`: clear selection.
 
+If `models/egg_fish_detector.pt` exists, the Model Assistant also shows YOLO evidence for relevant images: `egg_count`, `fish_count`, and the fusion class. The IDE never auto-moves or auto-deletes images based on detector output; it only gives you a stronger review signal.
+
 ## Dedupe Reviewed
 
 Dry-run first:
@@ -176,6 +179,17 @@ Crawl image candidates only into raw batch folders:
 
 Never crawl directly into `data/reviewed` or `data/classification`.
 
+Canh chua focused crawl with model filtering:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\28_crawl_canh_chua_to_review.py `
+  --apply `
+  --per-query 20 `
+  --max-downloads-per-class 80
+```
+
+This writes only model-filtered survivors into `data/inbox/review/canh_chua_*_scrape_<timestamp>` and logs rejected duplicates/model rejects in `outputs/reports`.
+
 ## Build Training Dataset
 
 Rebuild `data/classification` from trusted reviewed data:
@@ -223,6 +237,53 @@ MyDrive/canteen_checkout/datasets/classification.zip
 
 Kaggle:
 /kaggle/input/<your-dataset>/classification.zip
+```
+
+## YOLO Egg/Fish Detector
+
+The dish classifier remains the main model. The YOLO detector is an auxiliary model for two hard decisions:
+
+- `egg`: helps distinguish `thit_kho` from `thit_kho_trung` and count extra eggs;
+- `fish`: helps distinguish `canh_chua_co_ca` from `canh_chua_khong_ca`.
+
+Build the unified detector dataset from the deduped Roboflow exports:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\29_build_egg_fish_yolo_dataset.py --clear
+```
+
+Package it for Colab:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\30_package_yolo_dataset.py
+```
+
+Outputs:
+
+```text
+data/detection/egg_fish/data.yaml
+outputs/cloud/egg_fish_yolo.zip
+outputs/cloud/egg_fish_yolo.manifest.json
+outputs/reports/egg_fish_dataset_report.json
+outputs/reports/egg_fish_dataset_report.csv
+```
+
+Upload `outputs/cloud/egg_fish_yolo.zip` to:
+
+```text
+MyDrive/canteen_checkout/datasets/egg_fish_yolo.zip
+```
+
+Then open `04_colab_train_yolo_detector.ipynb` on Colab GPU. The default detector is `yolo11s.pt`, with `imgsz=640`, `epochs=100`, `batch=16`, and `patience=20`. The notebook saves the canonical model to:
+
+```text
+MyDrive/canteen_checkout/models/egg_fish_detector.pt
+```
+
+Local smoke train, if needed:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\31_train_yolo_detector.py --epochs 1 --batch 2 --model yolo11n.pt
 ```
 
 ## Train
@@ -302,6 +363,15 @@ CLI demo:
 .\.venv\Scripts\python.exe scripts\06_demo_checkout.py --image data\demo\YOUR_IMAGE.jpg
 ```
 
+CLI demo with detector fusion:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\06_demo_checkout.py `
+  --image data\demo\YOUR_IMAGE.jpg `
+  --use-detector `
+  --detector models\egg_fish_detector.pt
+```
+
 Manual crop helper:
 
 ```powershell
@@ -317,6 +387,7 @@ Use the root cloud workflow notebooks:
 01_colab_demo_checkout.ipynb       # upload one tray image and run checkout
 02_colab_gradcam_debug.ipynb       # inspect weak classes with Grad-CAM
 03_colab_read_reports.ipynb        # read classification report/loss/confusion matrix
+04_colab_train_yolo_detector.ipynb # train YOLO egg/fish detector
 ```
 
 The `00` notebook documents which script to run for local packaging, Google Drive dataset loading, Kaggle input loading, training, report reading, and artifact export. The old `notebooks/` folder now only contains a pointer README.

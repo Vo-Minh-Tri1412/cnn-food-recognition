@@ -23,6 +23,7 @@ from PIL import Image
 from canteen_checkout.config import (
     CLASSIFICATION_DIR,
     DATA_DIR,
+    DEFAULT_DETECTOR_PATH,
     DEFAULT_MODEL_PATH,
     DISH_CLASSES,
     EXTRAS_DIR,
@@ -32,6 +33,14 @@ from canteen_checkout.config import (
     REVIEWED_DIR,
 )
 from canteen_checkout.data_quality import assess_image, hamming_distance_hex
+from canteen_checkout.detector import (
+    EGG_RELATED_CLASSES,
+    FISH_RELATED_CLASSES,
+    detect_objects,
+    empty_evidence,
+    fuse_decision,
+    load_yolo_detector,
+)
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 
 
@@ -49,6 +58,7 @@ ACTION_FIELDS = [
 DONE_FIELDS = ["timestamp", "item_id", "path", "root", "folder", "class_name", "note"]
 
 MODEL_CACHE: dict[str, object] = {}
+DETECTOR_CACHE: dict[str, object] = {}
 METRIC_CACHE: dict[str, tuple[float, int, object]] = {}
 PATH_CACHE: dict[tuple[str, str], list[tuple[Path, str, str]]] = {}
 COUNT_CACHE: dict[str, dict[str, object]] = {}
@@ -358,6 +368,16 @@ def load_model_once(model_path: Path):
     return cached
 
 
+def load_detector_once(detector_path: Path):
+    key = str(detector_path.resolve())
+    cached = DETECTOR_CACHE.get(key)
+    if cached:
+        return cached
+    detector = load_yolo_detector(detector_path)
+    DETECTOR_CACHE[key] = detector
+    return detector
+
+
 @torch.no_grad()
 def predict_item(item: DataItem, threshold: float) -> dict[str, object]:
     model, class_names, image_size, checkpoint, device = load_model_once(DEFAULT_MODEL_PATH)
@@ -381,6 +401,21 @@ def predict_item(item: DataItem, threshold: float) -> dict[str, object]:
         decision = "small_margin"
     else:
         decision = "ok"
+    relevant_classes = EGG_RELATED_CLASSES | FISH_RELATED_CLASSES
+    detector_error = ""
+    evidence = empty_evidence(DEFAULT_DETECTOR_PATH, loaded=False)
+    if DEFAULT_DETECTOR_PATH.exists() and {item.class_name, top1, top2} & relevant_classes:
+        try:
+            detector = load_detector_once(DEFAULT_DETECTOR_PATH)
+            evidence = detect_objects(detector, item.path, detector_path=DEFAULT_DETECTOR_PATH)
+        except Exception as exc:
+            detector_error = str(exc)
+    fusion = fuse_decision(
+        raw_class_name=top1,
+        raw_confidence=top1_conf,
+        uncertain=top1_conf < threshold or margin < 0.15,
+        evidence=evidence,
+    )
     return {
         "top1": top1,
         "top1_confidence": round(top1_conf, 4),
@@ -389,6 +424,13 @@ def predict_item(item: DataItem, threshold: float) -> dict[str, object]:
         "margin": round(margin, 4),
         "decision": decision,
         "model_arch": checkpoint.get("arch", ""),
+        "detector_loaded": evidence.detector_loaded,
+        "detector_error": detector_error,
+        "egg_count": evidence.egg_count,
+        "fish_count": evidence.fish_count,
+        "detections": [detection.as_dict() for detection in evidence.detections],
+        "fusion_class": fusion.class_name,
+        "fusion_reason": fusion.fusion_reason,
     }
 
 
@@ -403,6 +445,9 @@ class DataIDE:
             "target_roots": target_roots(),
             "classes": DISH_CLASSES,
             "log": relative_or_absolute(action_log()),
+            "model_path": relative_or_absolute(DEFAULT_MODEL_PATH) if DEFAULT_MODEL_PATH.exists() else "",
+            "detector_path": relative_or_absolute(DEFAULT_DETECTOR_PATH) if DEFAULT_DETECTOR_PATH.exists() else "",
+            "detector_available": DEFAULT_DETECTOR_PATH.exists(),
         }
 
     def folders(self, root_value: str) -> dict[str, object]:
@@ -713,7 +758,28 @@ function selectCurrentRow(){const [start,end]=rowBounds();for(let i=start;i<end;
 async function init(){const s=await api('/api/state');state.classes=s.classes;state.roots=s.roots;state.targetRoots=s.target_roots||[];$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.mode)}</option>`).join('');$('targetRoot').innerHTML=state.targetRoots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetLabelList').innerHTML=(state.classes||[]).concat(['canh_chua_hai_san','khay_background','mon_khac','mon_ngoai_de','future_use']).map(c=>`<option value="${esc(c)}"></option>`).join('');state.initialized=true;await rootChanged()}
 async function load(opts={}){const seq=++state.loadSeq;const nextRow=opts.keepRow?state.cursorRow:0;state.selected.clear();state.preds={};const rootValue=$('rootSelect').value;status('Loading files...');const q=new URLSearchParams({root:rootValue,page_size:'120'});if(state.rootMode==='classification'){q.set('split',$('splitSelect').value);q.set('class_name',$('classFilter').value)}else{q.set('folder',$('folderFilter').value)}const d=await api('/api/browse?'+q);if(seq!==state.loadSeq)return;state.rootMode=d.mode||state.rootMode;state.activeRoot=rootValue;state.filterKey=currentFilterKey();state.items=d.items;state.lastTotal=d.total;state.hiddenDone=d.hidden_done||0;state.cursorRow=nextRow;clampRow();renderCounts(d.counts);renderGrid();status(`${d.total} files · queue refreshed`);scrollToRow('auto')}
 function renderCounts(c){const detail=state.rootMode==='classification'?c.classes:c.folders;const detailTitle=state.rootMode==='classification'?'Classes':'Folders';$('counts').innerHTML=`<div class=stats><div class=stat>Total<br><b>${c.total}</b></div><div class=stat>${detailTitle}<br><b>${Object.keys(detail||{}).length}</b></div><div class=stat>Sources<br><b>${esc(Object.keys(c.sources).join(', ')||'-')}</b></div></div><pre>${esc(JSON.stringify(detail||{},null,2))}</pre>`}
-function renderGrid(){const cols=columnsPerRow();$('grid').innerHTML=state.items.map((it,idx)=>{const p=state.preds[it.id];const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';const row=Math.floor(idx/cols);const keyIndex=idx%cols;const key=keyIndex===9?'0':String(keyIndex+1);const active=row===state.cursorRow;return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}" loading="lazy"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div><div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`}).join('');document.querySelectorAll('.card').forEach(card=>{card.onclick=e=>{if(e.target.dataset.fb){feedback(card.dataset.id,e.target.dataset.fb);return}state.cursorRow=Math.floor(Number(card.dataset.index)/columnsPerRow());state.selected.has(card.dataset.id)?state.selected.delete(card.dataset.id):state.selected.add(card.dataset.id);updateHighlights()}});updateQueueStatus()}
+function renderGrid(){
+  const cols=columnsPerRow();
+  $('grid').innerHTML=state.items.map((it,idx)=>{
+    const p=state.preds[it.id];
+    const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';
+    const detector=p&&p.detector_loaded?`<div class=small>YOLO egg ${esc(p.egg_count)} · fish ${esc(p.fish_count)}<br>fusion ${esc(p.fusion_class)} · ${esc(p.fusion_reason)}</div>`:(p&&p.detector_error?`<div class="small bad">YOLO error: ${esc(p.detector_error)}</div>`:'');
+    const row=Math.floor(idx/cols);
+    const keyIndex=idx%cols;
+    const key=keyIndex===9?'0':String(keyIndex+1);
+    const active=row===state.cursorRow;
+    return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}" loading="lazy"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div>${detector}<div class=row><button data-fb="yes">Model dung</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`;
+  }).join('');
+  document.querySelectorAll('.card').forEach(card=>{
+    card.onclick=e=>{
+      if(e.target.dataset.fb){feedback(card.dataset.id,e.target.dataset.fb);return}
+      state.cursorRow=Math.floor(Number(card.dataset.index)/columnsPerRow());
+      state.selected.has(card.dataset.id)?state.selected.delete(card.dataset.id):state.selected.add(card.dataset.id);
+      updateHighlights();
+    }
+  });
+  updateQueueStatus();
+}
 async function act(action,extra={}){const ids=[...state.selected];if(!ids.length){alert('Chưa chọn ảnh');return}setLoading(true);status(`Đang xử lý ${ids.length} ảnh...`);try{const d=await api('/api/batch-action',{action,item_ids:ids,...extra});await load({keepRow:true});status(`Đã xử lý ${d.processed} ảnh`)}catch(e){status('Lỗi: '+e.message)}finally{setLoading(false)}}
 async function actVisible(action,extra={}){const ids=state.items.map(x=>x.id);if(!ids.length){alert('Không có ảnh visible');return}setLoading(true);status(`Đang xử lý ${ids.length} ảnh visible...`);try{const d=await api('/api/batch-action',{action,item_ids:ids,...extra});await load({keepRow:true});status(`Đã xử lý ${d.processed} ảnh visible`)}catch(e){status('Lỗi: '+e.message)}finally{setLoading(false)}}
 async function predict(){const ids=state.items.map(x=>x.id);if(!ids.length)return;setLoading(true);status(`Predict ${ids.length} ảnh visible...`);const d=await api('/api/predict',{item_ids:ids,threshold:Number($('threshold').value)});state.preds={};for(const p of d.predictions)state.preds[p.id]=p;const counts={};for(const p of d.predictions)counts[p.decision]=(counts[p.decision]||0)+1;$('modelStats').textContent=JSON.stringify(counts);renderGrid();status('Predict xong');setLoading(false)}

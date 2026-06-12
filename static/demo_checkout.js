@@ -56,7 +56,11 @@ async function init() {
   $("imageSelect").innerHTML = optionHtml(state.app.images);
   $("templateSelect").innerHTML = optionHtml(state.app.templates);
   const badge = $("modelBadge");
-  if (badge) badge.textContent = state.app.default_model_path ? "Model ready" : "Model missing";
+  if (badge) {
+    const classifierReady = state.app.default_model_path ? "Classifier ready" : "Classifier missing";
+    const detectorReady = state.app.default_detector_path ? "Detector ready" : "Detector missing";
+    badge.textContent = `${classifierReady} · ${detectorReady}`;
+  }
 
   if (state.app.images.length) {
     await loadImage(state.app.images[0].path);
@@ -478,6 +482,13 @@ function renderBill(bill) {
   $("billList").innerHTML = bill.items.map((item, index) => {
     const confidence = Math.max(0, Math.min(1, Number(item.confidence || 0)));
     const confPct = Math.round(confidence * 100);
+    const raw = item.raw_class_name && item.raw_class_name !== item.class_name
+      ? `${item.raw_class_name} → ${item.class_name}`
+      : item.class_name;
+    const evidence = [];
+    if (Number(item.egg_count || 0) > 0) evidence.push(`egg=${item.egg_count}`);
+    if (Number(item.fish_count || 0) > 0) evidence.push(`fish=${item.fish_count}`);
+    if (item.fusion_reason && item.fusion_reason !== "classifier_only") evidence.push(item.fusion_reason);
     const tag = item.ignored
       ? '<span class="tag muted">bỏ qua</span>'
       : item.uncertain
@@ -490,7 +501,7 @@ function renderBill(bill) {
           <strong>${index + 1}. ${esc(item.display_name)} ${tag}</strong>
           <div class="bill-price">${fmtVnd(item.price_vnd)}</div>
           <div class="confidence"><span style="width:${confPct}%"></span></div>
-          <div class="subline">${esc(item.class_name)} · ${confPct}%</div>
+          <div class="subline">${esc(raw)} · ${confPct}%${evidence.length ? " · " + esc(evidence.join(" · ")) : ""}</div>
         </div>
       </article>
     `;
@@ -514,6 +525,8 @@ async function runCheckout() {
       image_path: state.imagePath,
       regions: state.regions,
       threshold: thresholdInput ? Number(thresholdInput.value || 0.55) : 0.55,
+      use_detector: true,
+      detector_threshold: 0.25,
       egg_count: eggCountInput ? Number(eggCountInput.value || 1) : 1,
     });
     renderBill(bill);

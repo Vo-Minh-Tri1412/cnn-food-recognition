@@ -13,8 +13,9 @@ if hasattr(sys.stdout, "reconfigure"):
 import torch
 from PIL import Image
 
-from canteen_checkout.config import BILLS_DIR, CROPPED_DISHES_DIR, DEFAULT_MODEL_PATH
+from canteen_checkout.config import BILLS_DIR, CROPPED_DISHES_DIR, DEFAULT_DETECTOR_PATH, DEFAULT_MODEL_PATH
 from canteen_checkout.cropping import crop_regions, five_compartment_template, load_regions
+from canteen_checkout.detector import detect_objects, empty_evidence, fuse_decision, load_yolo_detector
 from canteen_checkout.io_utils import load_prices
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 from canteen_checkout.pricing import THIT_KHO_TRUNG_CLASS, dish_price
@@ -34,6 +35,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run checkout demo on one tray image.")
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
+    parser.add_argument("--detector", type=Path, default=DEFAULT_DETECTOR_PATH)
+    parser.add_argument("--use-detector", action="store_true", help="Use YOLO egg/fish detector fusion if the detector exists.")
+    parser.add_argument("--detector-threshold", type=float, default=0.25)
     parser.add_argument("--regions-json", type=Path, default=None)
     parser.add_argument("--threshold", type=float, default=0.45)
     parser.add_argument("--ignore-region", action="append", default=[], help="Region name to crop but exclude from billing. Can be repeated.")
@@ -69,6 +73,16 @@ def main() -> None:
     else:
         print(f"Model not found: {args.model}. Bill will mark crops as unknown.")
 
+    detector = None
+    detector_loaded = False
+    if args.use_detector:
+        if args.detector.exists():
+            detector = load_yolo_detector(args.detector)
+            detector_loaded = True
+            print(f"Loaded detector: {args.detector}")
+        else:
+            print(f"Detector not found: {args.detector}. Fusion disabled.")
+
     items = []
     total = 0
     for crop_path, region in zip(crop_paths, regions):
@@ -90,12 +104,32 @@ def main() -> None:
             confidence = 0.0
             uncertain = True
 
+        raw_class_name = class_name
+        raw_confidence = confidence
+        evidence = empty_evidence(args.detector, detector_loaded)
+        fusion_reason = "classifier_only"
+        final_egg_count = args.egg_count if class_name == THIT_KHO_TRUNG_CLASS else None
+        if detector is not None and not ignored and not forced_label:
+            evidence = detect_objects(detector, crop_path, detector_path=args.detector, confidence=args.detector_threshold)
+            fusion = fuse_decision(
+                raw_class_name=raw_class_name,
+                raw_confidence=raw_confidence,
+                uncertain=uncertain,
+                evidence=evidence,
+                manual_egg_count=args.egg_count,
+            )
+            class_name = fusion.class_name
+            confidence = fusion.confidence
+            uncertain = fusion.uncertain
+            final_egg_count = fusion.egg_count
+            fusion_reason = fusion.fusion_reason
+
         price_row = prices.get(class_name)
         price_info = dish_price(
             class_name,
             prices,
             uncertain=uncertain,
-            egg_count=args.egg_count if class_name == THIT_KHO_TRUNG_CLASS else None,
+            egg_count=final_egg_count if class_name == THIT_KHO_TRUNG_CLASS else None,
         )
         price_vnd = price_info.total_price_vnd
         display_name = class_name if price_row is None else price_row.display_name
@@ -104,14 +138,20 @@ def main() -> None:
             {
                 "crop_path": str(crop_path),
                 "region_name": region.name,
+                "raw_class_name": raw_class_name,
+                "raw_confidence": round(raw_confidence, 4),
                 "class_name": class_name,
                 "display_name": display_name,
                 "confidence": round(confidence, 4),
                 "uncertain": uncertain,
                 "ignored": ignored,
+                "egg_count": price_info.egg_count,
+                "fish_count": evidence.fish_count,
+                "detections": [detection.as_dict() for detection in evidence.detections],
+                "detector_evidence": evidence.as_dict(),
+                "fusion_reason": fusion_reason,
                 "base_price_vnd": price_info.base_price_vnd,
                 "extra_price_vnd": price_info.extra_price_vnd,
-                "egg_count": price_info.egg_count,
                 "price_vnd": price_vnd,
             }
         )
@@ -120,7 +160,10 @@ def main() -> None:
         "image_path": str(image_path),
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "model_path": str(args.model) if args.model.exists() else None,
+        "detector_path": str(args.detector) if args.use_detector and args.detector.exists() else None,
+        "detector_loaded": detector_loaded,
         "threshold": args.threshold,
+        "detector_threshold": args.detector_threshold,
         "items": items,
         "total_vnd": total,
     }

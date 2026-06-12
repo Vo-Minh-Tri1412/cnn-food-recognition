@@ -24,6 +24,7 @@ from PIL import Image
 from canteen_checkout.config import (
     BILLS_DIR,
     CROPPED_DISHES_DIR,
+    DEFAULT_DETECTOR_PATH,
     DEFAULT_MODEL_PATH,
     DEMO_TRAYS_DIR,
     DISH_CLASSES,
@@ -31,6 +32,7 @@ from canteen_checkout.config import (
     PROJECT_ROOT,
 )
 from canteen_checkout.cropping import CropRegion, crop_regions, five_compartment_template, load_regions
+from canteen_checkout.detector import detect_objects, empty_evidence, fuse_decision, load_yolo_detector
 from canteen_checkout.io_utils import load_prices
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 from canteen_checkout.pricing import THIT_KHO_TRUNG_CLASS, dish_price
@@ -43,6 +45,7 @@ DEMO_TEMPLATE_PATH = TEMPLATE_DIR / "demo_checkout.html"
 IGNORE_LABELS = {"ignore", "ignored", "unknown", "other", "extra"}
 
 MODEL_CACHE: dict[str, object] = {}
+DETECTOR_CACHE: dict[str, object] = {}
 
 
 @torch.no_grad()
@@ -147,6 +150,16 @@ def load_model_once(model_path: Path):
     return cached
 
 
+def load_detector_once(detector_path: Path):
+    key = str(detector_path.resolve())
+    cached = DETECTOR_CACHE.get(key)
+    if cached:
+        return cached
+    detector = load_yolo_detector(detector_path)
+    DETECTOR_CACHE[key] = detector
+    return detector
+
+
 def run_checkout(payload: dict) -> dict:
     image_path = resolve_project_path(str(payload["image_path"]))
     if not image_path.exists():
@@ -155,6 +168,9 @@ def run_checkout(payload: dict) -> dict:
         raise ValueError("Only project files can be used in the demo app")
 
     model_path = resolve_project_path(str(payload.get("model_path") or DEFAULT_MODEL_PATH))
+    detector_path = resolve_project_path(str(payload.get("detector_path") or DEFAULT_DETECTOR_PATH))
+    use_detector = bool(payload.get("use_detector", True))
+    detector_threshold = float(payload.get("detector_threshold", 0.25))
     threshold = float(payload.get("threshold", 0.55))
     egg_count = int(payload.get("egg_count", 1))
     regions = regions_from_payload(payload, image_path)
@@ -172,6 +188,11 @@ def run_checkout(payload: dict) -> dict:
     if model_path.exists():
         model, class_names, model_image_size, _, device = load_model_once(model_path)
         model_loaded = True
+    detector = None
+    detector_loaded = False
+    if use_detector and detector_path.exists():
+        detector = load_detector_once(detector_path)
+        detector_loaded = True
 
     items = []
     total = 0
@@ -194,12 +215,32 @@ def run_checkout(payload: dict) -> dict:
             confidence = 0.0
             uncertain = True
 
+        raw_class_name = class_name
+        raw_confidence = confidence
+        evidence = empty_evidence(detector_path, detector_loaded)
+        fusion_reason = "classifier_only"
+        final_egg_count = egg_count if class_name == THIT_KHO_TRUNG_CLASS else None
+        if detector is not None and not ignored and not forced_label:
+            evidence = detect_objects(detector, crop_path, detector_path=detector_path, confidence=detector_threshold)
+            fusion = fuse_decision(
+                raw_class_name=raw_class_name,
+                raw_confidence=raw_confidence,
+                uncertain=uncertain,
+                evidence=evidence,
+                manual_egg_count=egg_count,
+            )
+            class_name = fusion.class_name
+            confidence = fusion.confidence
+            uncertain = fusion.uncertain
+            final_egg_count = fusion.egg_count
+            fusion_reason = fusion.fusion_reason
+
         price_row = prices.get(class_name)
         price_info = dish_price(
             class_name,
             prices,
             uncertain=uncertain,
-            egg_count=egg_count if class_name == THIT_KHO_TRUNG_CLASS else None,
+            egg_count=final_egg_count if class_name == THIT_KHO_TRUNG_CLASS else None,
         )
         total += price_info.total_price_vnd
         display_name = class_name if price_row is None else price_row.display_name
@@ -208,15 +249,21 @@ def run_checkout(payload: dict) -> dict:
                 "crop_path": relative_or_absolute(crop_path),
                 "crop_url": f"/file?path={relative_or_absolute(crop_path)}",
                 "region_name": region.name,
+                "raw_class_name": raw_class_name,
+                "raw_confidence": round(raw_confidence, 4),
                 "class_name": class_name,
                 "display_name": display_name,
                 "confidence": round(confidence, 4),
                 "uncertain": uncertain,
                 "ignored": ignored,
+                "egg_count": price_info.egg_count,
+                "fish_count": evidence.fish_count,
+                "detections": [detection.as_dict() for detection in evidence.detections],
+                "detector_evidence": evidence.as_dict(),
+                "fusion_reason": fusion_reason,
                 "price_vnd": price_info.total_price_vnd,
                 "base_price_vnd": price_info.base_price_vnd,
                 "extra_price_vnd": price_info.extra_price_vnd,
-                "egg_count": price_info.egg_count,
             }
         )
 
@@ -224,7 +271,11 @@ def run_checkout(payload: dict) -> dict:
         "image_path": relative_or_absolute(image_path),
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "model_path": relative_or_absolute(model_path) if model_path.exists() else None,
+        "detector_path": relative_or_absolute(detector_path) if detector_path.exists() else None,
+        "detector_loaded": detector_loaded,
+        "use_detector": use_detector,
         "threshold": threshold,
+        "detector_threshold": detector_threshold,
         "items": items,
         "total_vnd": total,
     }
@@ -265,6 +316,7 @@ def app_state() -> dict:
             for key, value in prices.items()
         },
         "default_model_path": relative_or_absolute(DEFAULT_MODEL_PATH),
+        "default_detector_path": relative_or_absolute(DEFAULT_DETECTOR_PATH) if DEFAULT_DETECTOR_PATH.exists() else "",
     }
 
 

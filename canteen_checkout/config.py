@@ -23,6 +23,7 @@ EXTRAS_DIR = DATA_DIR / "extras"
 RAW_TEACHER_TRAYS_DIR = DATA_DIR / "raw_teacher_trays"
 DEMO_TRAYS_DIR = DATA_DIR / "demo"
 CLASSIFICATION_DIR = DATA_DIR / "classification"
+DETECTION_DIR = DATA_DIR / "detection"
 DOWNLOADS_DIR = DATA_DIR / "downloads"
 SCRAPED_CANDIDATES_DIR = DATA_DIR / "scraped_candidates"
 PROCESSED_CANDIDATES_DIR = DATA_DIR / "processed_candidates"
@@ -40,6 +41,7 @@ REPORTS_DIR = OUTPUTS_DIR / "reports"
 PRICES_CSV = PROJECT_ROOT / "prices.csv"
 CLASS_NAMES_JSON = MODELS_DIR / "class_names.json"
 DEFAULT_MODEL_PATH = MODELS_DIR / "dish_classifier.pt"
+DEFAULT_DETECTOR_PATH = MODELS_DIR / "egg_fish_detector.pt"
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 

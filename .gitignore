@@ -14,6 +14,8 @@ data/reviewed/
 data/extras/
 data/classification/
 data/downloads/
+data/download/
+data/detection/
 data/scraped_candidates/
 data/processed_candidates/
 data/rejected_candidates/
