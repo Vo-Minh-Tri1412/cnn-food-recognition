@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import hashlib
@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -28,6 +28,17 @@ PACKAGE_FILES = [
     "classification.manifest.json",
     "egg_fish_yolo.zip",
     "egg_fish_yolo.manifest.json",
+    "egg_fish_shared_yolo.zip",
+    "egg_fish_shared_yolo.manifest.json",
+]
+
+PROJECT_FILES = [
+    "00_colab_kaggle_workflow.ipynb",
+    "README.md",
+    "data/README.md",
+    "scripts/README.md",
+    "requirements.txt",
+    "prices.csv",
 ]
 
 
@@ -66,7 +77,7 @@ def candidate_drive_roots() -> list[Path]:
             [
                 drive / "My Drive" / "canteen_checkout",
                 drive / "MyDrive" / "canteen_checkout",
-                drive / "Drive của tôi" / "canteen_checkout",
+                drive / "Drive cá»§a tÃ´i" / "canteen_checkout",
             ]
         )
 
@@ -184,6 +195,24 @@ def push_packages(drive_root: Path, *, apply: bool, overwrite: bool) -> list[dic
     return rows
 
 
+def push_models(drive_root: Path, *, apply: bool, overwrite: bool) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for filename in MODEL_FILES:
+        source = MODELS_DIR / filename
+        target = drive_root / "models" / filename
+        rows.append(copy_file(source, target, apply=apply, overwrite=overwrite))
+    return rows
+
+
+def push_project_files(drive_root: Path, *, apply: bool, overwrite: bool) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for filename in PROJECT_FILES:
+        source = PROJECT_ROOT / filename
+        target = drive_root / "project_files" / filename
+        rows.append(copy_file(source, target, apply=apply, overwrite=overwrite))
+    return rows
+
+
 def pull_models(drive_root: Path, *, apply: bool, overwrite: bool) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for filename in MODEL_FILES:
@@ -238,12 +267,24 @@ def status_payload(drive_root: Path) -> dict[str, object]:
         }
         for filename in PACKAGE_FILES
     }
+    project_files = {
+        filename: {
+            "local": relative_or_absolute(PROJECT_ROOT / filename)
+            if (PROJECT_ROOT / filename).exists()
+            else "",
+            "drive": str(drive_root / "project_files" / filename)
+            if (drive_root / "project_files" / filename).exists()
+            else "",
+        }
+        for filename in PROJECT_FILES
+    }
     run_dir = latest_run_dir(drive_root)
     return {
         "drive_root": str(drive_root),
         "drive_models": drive_models,
         "local_models": local_models,
         "packages": packages,
+        "project_files": project_files,
         "latest_drive_run": str(run_dir) if run_dir else "",
     }
 
@@ -259,6 +300,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Sync Canteen Checkout artifacts between local project and Google Drive for desktop.")
     parser.add_argument("--drive-root", default=None, help="Path such as G:\\My Drive\\canteen_checkout. Defaults to auto-detect.")
     parser.add_argument("--push-packages", action="store_true", help="Copy outputs/cloud/*.zip and manifests to Drive datasets/.")
+    parser.add_argument("--push-models", action="store_true", help="Copy local models/*.pt and class_names.json to Drive models/.")
+    parser.add_argument("--push-project-files", action="store_true", help="Copy the main notebook, README, requirements, and prices.csv to Drive project_files/.")
+    parser.add_argument("--publish", action="store_true", help="One-shot local-to-Drive publish: packages, models, and project files.")
     parser.add_argument("--pull-models", action="store_true", help="Copy dish_classifier.pt, class_names.json, and egg_fish_detector.pt from Drive to local models/.")
     parser.add_argument("--pull-latest-run", action="store_true", help="Copy the newest Drive runs/<timestamp> folder to outputs/cloud/drive_runs/.")
     parser.add_argument("--all", action="store_true", help="Run push-packages, pull-models, and pull-latest-run.")
@@ -271,11 +315,15 @@ def main() -> None:
     overwrite = not args.no_overwrite
     actions: list[dict[str, object]] = []
 
-    if args.status or not any([args.push_packages, args.pull_models, args.pull_latest_run, args.all]):
+    if args.status or not any([args.push_packages, args.push_models, args.push_project_files, args.publish, args.pull_models, args.pull_latest_run, args.all]):
         actions.append({"action": "status", "status": "ok", **status_payload(drive_root)})
 
-    if args.all or args.push_packages:
+    if args.all or args.publish or args.push_packages:
         actions.extend(push_packages(drive_root, apply=args.apply, overwrite=overwrite))
+    if args.publish or args.push_models:
+        actions.extend(push_models(drive_root, apply=args.apply, overwrite=overwrite))
+    if args.publish or args.push_project_files:
+        actions.extend(push_project_files(drive_root, apply=args.apply, overwrite=overwrite))
     if args.all or args.pull_models:
         actions.extend(pull_models(drive_root, apply=args.apply, overwrite=overwrite))
     if args.all or args.pull_latest_run:

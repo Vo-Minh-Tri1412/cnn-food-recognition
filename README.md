@@ -2,54 +2,160 @@
 
 Local-first canteen checkout project for 11 HCMUS canteen dishes.
 
-The current workflow is:
+The main workflow is now intentionally small:
 
-1. collect/import candidate food images into `data/inbox/review`;
-2. review and clean data in the Data IDE;
-3. keep only trusted images in `data/reviewed/<class>`;
-4. regenerate `data/classification/{train,val,test}` from `data/reviewed`;
-5. train the dish classifier;
-6. demo tray checkout with crop regions, ignore regions, prices, and bill JSON.
+1. Keep trusted images in `data/reviewed/<class>/`.
+2. Generate `data/classification/train|val|test/` from `data/reviewed/`.
+3. Train the dish classifier.
+4. Build/train the auxiliary YOLO egg/fish detector.
+5. Demo tray checkout with crop regions, detector fusion, prices, and bill JSON.
 
-## Environment
+## Main Notebook
 
-Use the local virtual environment:
-
-```powershell
-.\.venv\Scripts\python.exe
-```
-
-Main dependencies are PyTorch, torchvision, OpenCV, Pillow, pandas, scikit-learn, matplotlib, tqdm, and Jupyter.
-
-Cloud workflow entrypoint:
+Use the single root notebook:
 
 ```text
 00_colab_kaggle_workflow.ipynb
-01_colab_demo_checkout.ipynb
-02_colab_gradcam_debug.ipynb
-03_colab_read_reports.ipynb
-04_colab_train_yolo_detector.ipynb
 ```
 
-Open these notebooks from GitHub in Google Colab or upload/import them into Kaggle. The `00` notebook is designed to clone this repo, find a packaged dataset, train, and save model/report artifacts. The other notebooks are smaller control panels for demo inference, Grad-CAM, reading training reports, and YOLO detector training.
+It covers setup, Drive/Kaggle data loading, classifier training, YOLO training, report reading, Grad-CAM, Demo App, Data IDE, and artifact export.
 
-## Core Data Tree
+## Clean Data Contract
+
+Only these folders matter for normal work:
 
 ```text
-data/inbox/review/          # images waiting for human review
-data/reviewed/<class>/      # trusted pool used to build training data
-data/extras/<label>/        # useful non-target labels, background, future use
-data/quarantine/<reason>/   # rejected, duplicates, and label conflicts
-data/classification/        # generated train/val/test dataset
-data/demo/                  # demo tray images and uploads
-data/archive/               # legacy/raw/frozen data
+data/reviewed/<class>/                 trusted source of truth
+data/classification/train|val|test/    generated classifier dataset
+data/detection/egg_fish_shared/        generated YOLO dataset with safe hard negatives
+data/inbox/review/<batch>/             images waiting for Data IDE review
+data/extras/<label>/                   useful images outside the official classes
+data/quarantine/<reason>/              rejected, duplicates, and label conflicts
+data/demo/                             demo uploads and tray images
+outputs/cloud/*.zip                    cloud-ready dataset packages
+models/*.pt                            trained model weights
 ```
 
-`data/classification` is generated output. Do not treat it as the long-term source of truth; rebuild it from `data/reviewed` when data changes.
+Legacy/raw/history data may still exist under `data/archive/`, `data/download/`, and `data/inbox/raw_batches/`, but do not train directly from those folders.
 
-Large data, model weights, and outputs are intentionally ignored by Git.
+## Active Scripts
 
-## The 11 Billing Classes
+Scripts are grouped by purpose:
+
+```text
+scripts/apps/01_demo_checkout_app.py
+scripts/apps/02_data_ide.py
+
+scripts/cli/01_crop_tray.py
+scripts/cli/02_demo_checkout.py
+
+scripts/data/01_build_classification_dataset.py
+scripts/data/02_audit_dataset_conflicts.py
+scripts/data/03_package_classification_dataset.py
+scripts/data/04_build_yolo_dataset.py
+scripts/data/05_build_yolo_shared_negatives.py
+scripts/data/06_package_yolo_dataset.py
+
+scripts/train/01_train_classifier.py
+scripts/train/02_train_yolo_detector.py
+
+scripts/debug/01_gradcam_debug.py
+scripts/cloud/01_sync_drive_artifacts.py
+```
+
+Old one-off scrape/import/migration scripts were removed from the active repo to keep the project readable.
+
+## Quick Commands
+
+Start Data IDE:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\apps\02_data_ide.py --host 127.0.0.1 --port 7864
+```
+
+Start Demo App:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\apps\01_demo_checkout_app.py --host 127.0.0.1 --port 7863
+```
+
+Build classifier dataset:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\data\01_build_classification_dataset.py `
+  --reviewed-source data\reviewed `
+  --old-weight 1 `
+  --reviewed-weight 1 `
+  --cross-class-hamming 4 `
+  --clear `
+  --clear-all
+```
+
+Audit classifier dataset:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\data\02_audit_dataset_conflicts.py --root data\classification --phash-threshold 4
+```
+
+Package classifier dataset:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\data\03_package_classification_dataset.py
+```
+
+Build and package YOLO detector dataset:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\data\04_build_yolo_dataset.py --clear
+.\.venv\Scripts\python.exe scripts\data\05_build_yolo_shared_negatives.py --clear --max-per-class 80
+.\.venv\Scripts\python.exe scripts\data\06_package_yolo_dataset.py `
+  --source data\detection\egg_fish_shared `
+  --output outputs\cloud\egg_fish_shared_yolo.zip `
+  --manifest outputs\cloud\egg_fish_shared_yolo.manifest.json
+```
+
+Train classifier:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train\01_train_classifier.py `
+  --data data\classification `
+  --arch efficientnet_b2 `
+  --epochs 8 `
+  --batch-size 16 `
+  --image-size 260 `
+  --augmentation strong `
+  --label-smoothing 0.05
+```
+
+Train YOLO detector:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train\02_train_yolo_detector.py `
+  --data data\detection\egg_fish_shared\data.yaml `
+  --model yolo11s.pt `
+  --epochs 100 `
+  --batch 16
+```
+
+Generate Grad-CAM:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\debug\01_gradcam_debug.py --data data\classification --split test --max-samples 32
+```
+
+Publish clean artifacts to Google Drive Desktop:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --publish --apply
+```
+
+Pull trained models back from Drive:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --pull-models --apply
+```
+
+## Billing Classes
 
 ```text
 com_trang
@@ -65,372 +171,4 @@ rau_xao
 trung_chien
 ```
 
-Prices live in `prices.csv`. For `thit_kho_trung`, one egg is included in the base price; extra eggs add 6,000 VND each.
-
-## Data IDE
-
-Start the review and data-management UI:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\21_data_ide.py --host 127.0.0.1 --port 7862
-```
-
-Open [http://127.0.0.1:7862](http://127.0.0.1:7862).
-
-Source roots:
-
-- `inbox_review`: new images waiting for review.
-- `reviewed`: trusted images already accepted.
-- `extras`: non-target labels such as background or future-use classes.
-- `quarantine`: rejected, duplicate, or conflict images.
-- `classification`: generated train/val/test dataset for inspection.
-- `data_workspace`: any image folder under `data`.
-
-Target roots:
-
-- `reviewed`: accepted target-class images.
-- `inbox_review`: put images back into review.
-- `extras`: useful images outside the 11-class task.
-- `quarantine`: rejected, duplicate, or uncertain images.
-
-The IDE now lets you choose a source folder and a target root/label directly. After move, quarantine, future-use, or mark-done actions, processed images leave the current queue.
-
-Useful shortcuts:
-
-- `1-9`, `0`: select image in the current row.
-- `A`: select the current row.
-- `Space`: next row.
-- `Shift+Space`: previous row.
-- `Enter`: move selected images to the chosen target root/label.
-- `Q`: quarantine selected images.
-- `F`: move selected images to an extra/future-use label.
-- `P`: run the current model on visible images.
-- `Esc`: clear selection.
-
-If `models/egg_fish_detector.pt` exists, the Model Assistant also shows YOLO evidence for relevant images: `egg_count`, `fish_count`, and the fusion class. The IDE never auto-moves or auto-deletes images based on detector output; it only gives you a stronger review signal.
-
-## Dedupe Reviewed
-
-Dry-run first:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\26_dedupe_reviewed.py --root data\reviewed
-```
-
-Apply safe quarantine:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\26_dedupe_reviewed.py --root data\reviewed --apply
-```
-
-Policy:
-
-- exact duplicate in the same class: keep one canonical file, quarantine the rest;
-- exact or near duplicate across classes: quarantine the conflict group;
-- near duplicate in the same class: threshold `8`;
-- cross-class conflict: threshold `4`.
-
-Reports are written to `outputs/reports`.
-
-## Import And Review New Data
-
-Put new raw images anywhere under `data/inbox`, for example:
-
-```text
-data/inbox/raw_batches/my_new_batch/raw/
-```
-
-Normalize/import a batch into the review queue:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\18_import_scrape_batch_to_review.py `
-  --source data\inbox\raw_batches\my_new_batch\raw `
-  --class-name rau_xao `
-  --pool rau_xao_my_new_batch `
-  --target review `
-  --dedupe-against data\reviewed `
-  --dedupe-against data\classification
-```
-
-Correct images should be moved in the Data IDE into `data/reviewed/<class>`. Ambiguous images should go to `data/extras/<label>` or `data/quarantine/<reason>`.
-
-## Search And Crawl
-
-Search public dataset links before crawling individual images:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\22_search_public_datasets.py --provider mixed
-```
-
-Crawl image candidates only into raw batch folders:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\09_collect_web_images.py `
-  --queries configs\green_vegetable_extra_queries.csv `
-  --provider mixed `
-  --out data\inbox\raw_batches\green_vegetable_batch\raw `
-  --manifest outputs\reports\green_vegetable_batch_manifest.csv `
-  --per-query 80 `
-  --max-downloads-per-class 300 `
-  --dedupe-against data\reviewed `
-  --dedupe-against data\classification `
-  --phash-threshold 6
-```
-
-Never crawl directly into `data/reviewed` or `data/classification`.
-
-Canh chua focused crawl with model filtering:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\28_crawl_canh_chua_to_review.py `
-  --apply `
-  --per-query 20 `
-  --max-downloads-per-class 80
-```
-
-This writes only model-filtered survivors into `data/inbox/review/canh_chua_*_scrape_<timestamp>` and logs rejected duplicates/model rejects in `outputs/reports`.
-
-## Build Training Dataset
-
-Rebuild `data/classification` from trusted reviewed data:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\17_build_weighted_classification_dataset.py `
-  --reviewed-source data\reviewed `
-  --old-weight 1 `
-  --reviewed-weight 1 `
-  --cross-class-hamming 4 `
-  --clear `
-  --clear-all
-```
-
-Current policy: all trusted reviewed images have equal weight. Cross-class duplicates are skipped and reported.
-
-Audit the final dataset:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\20_audit_dataset_conflicts.py --root data\classification --phash-threshold 4
-```
-
-## Package For Colab Or Kaggle
-
-Package the generated training dataset into one archive:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\27_package_cloud_dataset.py
-```
-
-Outputs:
-
-```text
-outputs/cloud/classification.zip
-outputs/cloud/classification.manifest.json
-```
-
-Current dataset size is about 149 MB, so it is reasonable to store on Google Drive or as a Kaggle Dataset. Prefer copying the zip to the cloud runtime and unzipping there before training; do not train directly from many small files on Drive.
-
-Recommended locations:
-
-```text
-Google Drive:
-MyDrive/canteen_checkout/datasets/classification.zip
-
-Kaggle:
-/kaggle/input/<your-dataset>/classification.zip
-```
-
-## Google Drive Desktop Sync
-
-If Google Drive for desktop is installed, this project can sync artifacts through the local Drive mount. On this machine the detected default is:
-
-```text
-G:\My Drive\canteen_checkout
-```
-
-Check what local and Drive artifacts exist:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\32_sync_drive_artifacts.py --status
-```
-
-Before training on Colab, push local packaged datasets to Drive:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\32_sync_drive_artifacts.py --push-packages --apply
-```
-
-After Colab finishes training and saves artifacts to Drive, pull the canonical models back to local:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\32_sync_drive_artifacts.py --pull-models --apply
-```
-
-To also copy the newest Drive run folder into `outputs/cloud/drive_runs/` for local report reading:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\32_sync_drive_artifacts.py --pull-models --pull-latest-run --apply
-```
-
-If Drive is mounted somewhere else, pass the root explicitly:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\32_sync_drive_artifacts.py `
-  --drive-root "G:\My Drive\canteen_checkout" `
-  --pull-models `
-  --apply
-```
-
-Without `--apply`, the script is a dry-run and only prints the planned copy actions.
-
-## YOLO Egg/Fish Detector
-
-The dish classifier remains the main model. The YOLO detector is an auxiliary model for two hard decisions:
-
-- `egg`: helps distinguish `thit_kho` from `thit_kho_trung` and count extra eggs;
-- `fish`: helps distinguish `canh_chua_co_ca` from `canh_chua_khong_ca`.
-
-Build the unified detector dataset from the deduped Roboflow exports:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\29_build_egg_fish_yolo_dataset.py --clear
-```
-
-Package it for Colab:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\30_package_yolo_dataset.py
-```
-
-Outputs:
-
-```text
-data/detection/egg_fish/data.yaml
-outputs/cloud/egg_fish_yolo.zip
-outputs/cloud/egg_fish_yolo.manifest.json
-outputs/reports/egg_fish_dataset_report.json
-outputs/reports/egg_fish_dataset_report.csv
-```
-
-Upload `outputs/cloud/egg_fish_yolo.zip` to:
-
-```text
-MyDrive/canteen_checkout/datasets/egg_fish_yolo.zip
-```
-
-Then open `04_colab_train_yolo_detector.ipynb` on Colab GPU. The default detector is `yolo11s.pt`, with `imgsz=640`, `epochs=100`, `batch=16`, and `patience=20`. The notebook saves the canonical model to:
-
-```text
-MyDrive/canteen_checkout/models/egg_fish_detector.pt
-```
-
-Local smoke train, if needed:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\31_train_yolo_detector.py --epochs 1 --batch 2 --model yolo11n.pt
-```
-
-## Train
-
-Recommended local training command:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\05_train_classifier.py `
-  --arch efficientnet_b0 `
-  --augmentation medium `
-  --epochs 6 `
-  --batch-size 8 `
-  --lr 0.0001 `
-  --label-smoothing 0.05
-```
-
-Supported `--arch` choices:
-
-```text
-mobilenet_v3_small
-mobilenet_v3_large
-efficientnet_b0
-efficientnet_b1
-efficientnet_b2
-efficientnet_b3
-resnet18
-resnet50
-convnext_tiny
-```
-
-For Colab GPU, start with `efficientnet_b2`. If it runs out of memory, use
-`efficientnet_b0` or reduce `--batch-size` to `4`.
-
-Supported `--augmentation` choices:
-
-```text
-light
-medium
-strong
-```
-
-The Colab training notebook defaults to `strong`. If validation loss becomes
-unstable, switch to `medium`.
-
-Outputs:
-
-```text
-models/dish_classifier.pt
-models/class_names.json
-outputs/reports/training_history.json
-outputs/reports/training_history.png
-outputs/reports/classification_report.txt
-outputs/reports/confusion_matrix.png
-```
-
-## Demo Checkout
-
-Browser demo:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\19_demo_checkout_app.py --host 127.0.0.1 --port 7861
-```
-
-Open [http://127.0.0.1:7861](http://127.0.0.1:7861).
-
-Demo frontend files:
-
-```text
-templates/demo_checkout.html
-static/demo_checkout.css
-static/demo_checkout.js
-```
-
-CLI demo:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\06_demo_checkout.py --image data\demo\YOUR_IMAGE.jpg
-```
-
-CLI demo with detector fusion:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\06_demo_checkout.py `
-  --image data\demo\YOUR_IMAGE.jpg `
-  --use-detector `
-  --detector models\egg_fish_detector.pt
-```
-
-Manual crop helper:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\04_crop_tray.py --image data\demo\YOUR_IMAGE.jpg --interactive --save-regions configs\my_regions.json
-```
-
-## Notebook
-
-Use the root cloud workflow notebooks:
-
-```text
-00_colab_kaggle_workflow.ipynb     # train on Colab/Kaggle/Drive
-01_colab_demo_checkout.ipynb       # upload one tray image and run checkout
-02_colab_gradcam_debug.ipynb       # inspect weak classes with Grad-CAM
-03_colab_read_reports.ipynb        # read classification report/loss/confusion matrix
-04_colab_train_yolo_detector.ipynb # train YOLO egg/fish detector
-```
-
-The `00` notebook documents which script to run for local packaging, Google Drive dataset loading, Kaggle input loading, training, report reading, and artifact export. The old `notebooks/` folder now only contains a pointer README.
+Prices live in `prices.csv`. Detector fusion is auxiliary: YOLO helps distinguish egg/fish cases, but the dish classifier remains the main model.

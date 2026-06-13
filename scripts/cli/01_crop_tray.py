@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import shutil
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from canteen_checkout.config import CLASSIFICATION_DIR, CROPPED_DISHES_DIR, DISH_CLASSES
 from canteen_checkout.cropping import (

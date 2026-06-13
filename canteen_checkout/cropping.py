@@ -29,7 +29,7 @@ def five_compartment_template(image_width: int, image_height: int) -> list[CropR
     """Approximate regions for common HCMUS metal trays.
 
     This is a starting point for MVP demos. For accurate crops, create a JSON
-    file with manual regions from scripts/04_crop_tray.py --interactive.
+    file with manual regions from scripts/cli/01_crop_tray.py --interactive.
     """
     w = image_width
     h = image_height

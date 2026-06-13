@@ -14,7 +14,8 @@ const state = {
 };
 
 function setStatus(text) {
-  $("status").textContent = text;
+  const el = $("status");
+  if (el) el.textContent = text;
 }
 
 function setLoading(active) {
