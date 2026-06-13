@@ -123,9 +123,13 @@ Train classifier:
   --epochs 8 `
   --batch-size 16 `
   --image-size 260 `
-  --augmentation strong `
+  --augmentation light `
+  --class-augmentation canh_chua_khong_ca=strong `
+  --oversample-class canh_chua_khong_ca:2.5 `
   --label-smoothing 0.05
 ```
+
+For an experiment after this baseline, add `--loss focal --focal-gamma 2.0`. Do not combine very aggressive oversampling and focal loss unless the confusion matrix still shows poor `canh_chua_khong_ca` recall.
 
 Train YOLO detector:
 
@@ -149,11 +153,13 @@ Publish clean artifacts to Google Drive Desktop:
 .\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --publish --apply
 ```
 
-Pull trained models back from Drive:
+Pull trained models and the newest report/run folder back from Drive:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --pull-models --apply
+.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --pull --apply
 ```
+
+Use `--pull-models --apply` only when you intentionally want weights without reports. Full pulled reports are stored under `outputs/cloud/drive_runs/<timestamp>/`.
 
 ## Billing Classes
 

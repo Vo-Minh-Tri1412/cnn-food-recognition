@@ -17,7 +17,7 @@ SUPPORTED_ARCHES = (
     "convnext_tiny",
 )
 
-SUPPORTED_AUGMENTATIONS = ("light", "medium", "strong")
+SUPPORTED_AUGMENTATIONS = ("none", "light", "medium", "strong")
 
 
 def _replace_classifier_tail(model: nn.Module, num_classes: int) -> nn.Module:
@@ -77,6 +77,15 @@ def train_transforms(image_size: int = 224, augmentation: str = "medium") -> tra
         raise ValueError(f"Unsupported augmentation: {augmentation}. Supported: {', '.join(SUPPORTED_AUGMENTATIONS)}")
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    if augmentation == "none":
+        return transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size)),
+                transforms.ToTensor(),
+                normalize,
+            ]
+        )
+
     if augmentation == "light":
         return transforms.Compose(
             [

@@ -144,6 +144,22 @@ def latest_run_dir(drive_root: Path) -> Path | None:
     return newest_path(runs)
 
 
+def report_files_in_run(run_dir: Path) -> list[str]:
+    if not run_dir.exists():
+        return []
+    suffixes = {".txt", ".json", ".csv", ".png", ".jpg", ".jpeg"}
+    keywords = ("report", "history", "result", "confusion", "curve", "labels", "pred")
+    files = []
+    for path in run_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in suffixes:
+            continue
+        name = path.name.lower()
+        parts = {part.lower() for part in path.parts}
+        if "reports" in parts or any(keyword in name for keyword in keywords):
+            files.append(path.relative_to(run_dir).as_posix())
+    return sorted(files)
+
+
 def copy_file(source: Path, target: Path, *, apply: bool, overwrite: bool) -> dict[str, object]:
     row = {
         "action": "copy_file",
@@ -244,7 +260,10 @@ def pull_latest_run(drive_root: Path, *, apply: bool) -> list[dict[str, object]]
             }
         ]
     target = OUTPUTS_DIR / "cloud" / "drive_runs" / run_dir.name
-    return [copy_tree(run_dir, target, apply=apply)]
+    row = copy_tree(run_dir, target, apply=apply)
+    row["run_name"] = run_dir.name
+    row["report_files"] = report_files_in_run(run_dir)
+    return [row]
 
 
 def status_payload(drive_root: Path) -> dict[str, object]:
@@ -286,6 +305,7 @@ def status_payload(drive_root: Path) -> dict[str, object]:
         "packages": packages,
         "project_files": project_files,
         "latest_drive_run": str(run_dir) if run_dir else "",
+        "latest_drive_run_reports": report_files_in_run(run_dir) if run_dir else [],
     }
 
 
@@ -303,6 +323,7 @@ def main() -> None:
     parser.add_argument("--push-models", action="store_true", help="Copy local models/*.pt and class_names.json to Drive models/.")
     parser.add_argument("--push-project-files", action="store_true", help="Copy the main notebook, README, requirements, and prices.csv to Drive project_files/.")
     parser.add_argument("--publish", action="store_true", help="One-shot local-to-Drive publish: packages, models, and project files.")
+    parser.add_argument("--pull", action="store_true", help="One-shot Drive-to-local pull: models plus newest run/report folder.")
     parser.add_argument("--pull-models", action="store_true", help="Copy dish_classifier.pt, class_names.json, and egg_fish_detector.pt from Drive to local models/.")
     parser.add_argument("--pull-latest-run", action="store_true", help="Copy the newest Drive runs/<timestamp> folder to outputs/cloud/drive_runs/.")
     parser.add_argument("--all", action="store_true", help="Run push-packages, pull-models, and pull-latest-run.")
@@ -315,7 +336,18 @@ def main() -> None:
     overwrite = not args.no_overwrite
     actions: list[dict[str, object]] = []
 
-    if args.status or not any([args.push_packages, args.push_models, args.push_project_files, args.publish, args.pull_models, args.pull_latest_run, args.all]):
+    if args.status or not any(
+        [
+            args.push_packages,
+            args.push_models,
+            args.push_project_files,
+            args.publish,
+            args.pull,
+            args.pull_models,
+            args.pull_latest_run,
+            args.all,
+        ]
+    ):
         actions.append({"action": "status", "status": "ok", **status_payload(drive_root)})
 
     if args.all or args.publish or args.push_packages:
@@ -324,9 +356,9 @@ def main() -> None:
         actions.extend(push_models(drive_root, apply=args.apply, overwrite=overwrite))
     if args.publish or args.push_project_files:
         actions.extend(push_project_files(drive_root, apply=args.apply, overwrite=overwrite))
-    if args.all or args.pull_models:
+    if args.all or args.pull or args.pull_models:
         actions.extend(pull_models(drive_root, apply=args.apply, overwrite=overwrite))
-    if args.all or args.pull_latest_run:
+    if args.all or args.pull or args.pull_latest_run:
         actions.extend(pull_latest_run(drive_root, apply=args.apply))
 
     payload = {

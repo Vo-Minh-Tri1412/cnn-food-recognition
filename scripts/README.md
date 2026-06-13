@@ -23,7 +23,7 @@ The project now keeps only active scripts in purpose-specific folders.
 
 ## train
 
-- `01_train_classifier.py`: train the 11-class dish classifier.
+- `01_train_classifier.py`: train the 11-class dish classifier; supports focal loss, targeted oversampling, and per-class augmentation overrides.
 - `02_train_yolo_detector.py`: train the auxiliary YOLO egg/fish detector.
 
 ## debug
@@ -32,7 +32,7 @@ The project now keeps only active scripts in purpose-specific folders.
 
 ## cloud
 
-- `01_sync_drive_artifacts.py`: sync packages, models, and project files through Google Drive Desktop.
+- `01_sync_drive_artifacts.py`: sync packages, models, project files, and full Drive run/report folders through Google Drive Desktop. Use `--pull --apply` to fetch both weights and reports.
 
 ## Removed Legacy Scripts
 
