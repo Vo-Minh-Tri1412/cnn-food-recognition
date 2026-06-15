@@ -55,6 +55,7 @@ scripts/data/03_package_classification_dataset.py
 scripts/data/04_build_yolo_dataset.py
 scripts/data/05_build_yolo_shared_negatives.py
 scripts/data/06_package_yolo_dataset.py
+scripts/data/07_collect_cookpad_candidates.py
 
 scripts/train/01_train_classifier.py
 scripts/train/02_train_yolo_detector.py
@@ -146,6 +147,22 @@ Generate Grad-CAM:
 ```powershell
 .\.venv\Scripts\python.exe scripts\debug\01_gradcam_debug.py --data data\classification --split test --max-samples 32
 ```
+
+Collect Cookpad candidates into Data IDE review:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\data\07_collect_cookpad_candidates.py `
+  --target-class canh_chua_khong_ca `
+  --queries-file configs\cookpad_canh_chua_khong_ca_extra_queries.txt `
+  --goal 200 `
+  --max-considered 900 `
+  --apply
+```
+
+Other focused Cookpad query files:
+
+- `configs/cookpad_trung_chien_queries.txt`
+- `configs/cookpad_dau_hu_sot_ca_queries.txt`
 
 Publish clean artifacts to Google Drive Desktop:
 

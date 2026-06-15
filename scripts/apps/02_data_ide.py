@@ -16,6 +16,8 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import torch
 from PIL import Image
@@ -697,7 +699,7 @@ HTML = r"""<!doctype html>
 <header><h1>Canteen Data IDE</h1><div id="status" class="small">Ready</div></header>
 <div class="app">
   <aside>
-    <div class="group"><h2>Nguá»“n dá»¯ liá»‡u</h2>
+    <div class="group"><h2>Nguồn dữ liệu</h2>
       <label>Root</label><select id="rootSelect"></select>
       <label id="splitLabel">Split</label><select id="splitSelect"><option value="">all/root</option><option>train</option><option>val</option><option>test</option></select>
       <label id="classFilterLabel">Class</label><select id="classFilter"></select>
@@ -721,12 +723,12 @@ HTML = r"""<!doctype html>
     <div class="group"><h2>Counts</h2><div id="counts" class="small"></div></div>
   </aside>
   <main class="main">
-    <div class="group"><h2>áº¢nh</h2>
-      <div class="queuebar"><div id="queueStatus" class="small">Row 0/0 Â· selected 0</div><button id="prevRowBtn">Prev row</button><button id="nextRowBtn">Next row</button></div>
+    <div class="group"><h2>Ảnh</h2>
+      <div class="queuebar"><div id="queueStatus" class="small">Row 0/0 · selected 0</div><button id="prevRowBtn">Prev row</button><button id="nextRowBtn">Next row</button></div>
       <div class="row three"><button id="selectRowBtn">Select row</button><button id="selectAllBtn">Select visible</button><button id="clearBtn">Clear</button></div>
-      <div class="shortcut small">1-0 chá»n áº£nh trong hÃ ng hiá»‡n táº¡i Â· A chá»n cáº£ hÃ ng Â· D mark done Â· Space xuá»‘ng hÃ ng Â· Shift+Space lÃªn hÃ ng Â· Enter move Â· Q quarantine Â· F future use Â· P predict Â· Esc clear</div>
+      <div class="shortcut small">1-0 chọn ảnh trong hàng hiện tại · A chọn cả hàng · D mark done · Space xuống hàng · Shift+Space lên hàng · Enter move · Q quarantine · F future use · P predict · Esc clear</div>
     </div>
-    <div id="loadingOverlay" class="loading-overlay hidden"><div class="spinner"></div>Äang xá»­ lÃ½â€¦</div>
+    <div id="loadingOverlay" class="loading-overlay hidden"><div class="spinner"></div>Đang xử lý...</div>
     <div id="grid" class="grid"></div>
   </main>
 </div>
@@ -748,27 +750,27 @@ function columnsPerRow(){const grid=$('grid');const width=grid?.clientWidth||win
 function totalRows(){return state.items.length?Math.ceil(state.items.length/columnsPerRow()):0}
 function clampRow(){const rows=totalRows();state.cursorRow=rows?Math.max(0,Math.min(state.cursorRow,rows-1)):0}
 function rowBounds(row=state.cursorRow){const cols=columnsPerRow();const start=row*cols;return [start,Math.min(start+cols,state.items.length)]}
-function updateQueueStatus(){const rows=totalRows();const hidden=state.hiddenDone?` Â· done hidden ${state.hiddenDone}`:'';$('queueStatus').textContent=`Row ${rows?state.cursorRow+1:0}/${rows} Â· selected ${state.selected.size} Â· visible ${state.items.length}/${state.lastTotal}${hidden}`}
+function updateQueueStatus(){const rows=totalRows();const hidden=state.hiddenDone?` · done hidden ${state.hiddenDone}`:'';$('queueStatus').textContent=`Row ${rows?state.cursorRow+1:0}/${rows} · selected ${state.selected.size} · visible ${state.items.length}/${state.lastTotal}${hidden}`}
 function scrollToRow(behavior='smooth'){const [start]=rowBounds();const card=document.querySelector(`.card[data-index="${start}"]`);if(card)card.scrollIntoView({block:'center',behavior})}
 function updateHighlights(){const cols=columnsPerRow();document.querySelectorAll('.card').forEach(card=>{const idx=Number(card.dataset.index);const row=Math.floor(idx/cols);const id=card.dataset.id;card.classList.toggle('active-row',row===state.cursorRow);card.classList.toggle('selected',state.selected.has(id));const kc=card.querySelector('.keycap');if(kc)kc.className=row===state.cursorRow?'keycap':'keycap muted'});updateQueueStatus()}
 function setLoading(busy){$('loadingOverlay').classList.toggle('hidden',!busy)}
 function setRow(row,behavior='smooth'){state.cursorRow=row;clampRow();updateHighlights();requestAnimationFrame(()=>scrollToRow(behavior))}
 function toggleRowKey(position){const [start,end]=rowBounds();const index=start+position;if(index>=end)return;const it=state.items[index];if(!it)return;state.selected.has(it.id)?state.selected.delete(it.id):state.selected.add(it.id);updateHighlights()}
 function selectCurrentRow(){const [start,end]=rowBounds();for(let i=start;i<end;i++)state.selected.add(state.items[i].id);updateHighlights()}
-async function init(){const s=await api('/api/state');state.classes=s.classes;state.roots=s.roots;state.targetRoots=s.target_roots||[];$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)} Â· ${esc(r.mode)}</option>`).join('');$('targetRoot').innerHTML=state.targetRoots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetLabel').innerHTML=(state.classes||[]).concat(['canh_chua_hai_san','khay_background','mon_khac','mon_ngoai_de','future_use']).map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');$('targetLabel').value='com_trang';state.initialized=true;await rootChanged()}
-async function load(opts={}){const seq=++state.loadSeq;const nextRow=opts.keepRow?state.cursorRow:0;state.selected.clear();state.preds={};const rootValue=$('rootSelect').value;status('Loading files...');const q=new URLSearchParams({root:rootValue,page_size:'120'});if(state.rootMode==='classification'){q.set('split',$('splitSelect').value);q.set('class_name',$('classFilter').value)}else{q.set('folder',$('folderFilter').value)}const d=await api('/api/browse?'+q);if(seq!==state.loadSeq)return;state.rootMode=d.mode||state.rootMode;state.activeRoot=rootValue;state.filterKey=currentFilterKey();state.items=d.items;state.lastTotal=d.total;state.hiddenDone=d.hidden_done||0;state.cursorRow=nextRow;clampRow();renderCounts(d.counts);renderGrid();status(`${d.total} files Â· queue refreshed`);scrollToRow('auto')}
+async function init(){const s=await api('/api/state');state.classes=s.classes;state.roots=s.roots;state.targetRoots=s.target_roots||[];$('rootSelect').innerHTML=s.roots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.mode)}</option>`).join('');$('targetRoot').innerHTML=state.targetRoots.map(r=>`<option value="${esc(r.path)}">${esc(r.name)}</option>`).join('');$('classFilter').innerHTML=clsOptions();$('targetLabel').innerHTML=(state.classes||[]).concat(['canh_chua_hai_san','khay_background','mon_khac','mon_ngoai_de','future_use']).map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');$('targetLabel').value='com_trang';state.initialized=true;await rootChanged()}
+async function load(opts={}){const seq=++state.loadSeq;const nextRow=opts.keepRow?state.cursorRow:0;state.selected.clear();state.preds={};const rootValue=$('rootSelect').value;status('Loading files...');const q=new URLSearchParams({root:rootValue,page_size:'120'});if(state.rootMode==='classification'){q.set('split',$('splitSelect').value);q.set('class_name',$('classFilter').value)}else{q.set('folder',$('folderFilter').value)}const d=await api('/api/browse?'+q);if(seq!==state.loadSeq)return;state.rootMode=d.mode||state.rootMode;state.activeRoot=rootValue;state.filterKey=currentFilterKey();state.items=d.items;state.lastTotal=d.total;state.hiddenDone=d.hidden_done||0;state.cursorRow=nextRow;clampRow();renderCounts(d.counts);renderGrid();status(`${d.total} files · queue refreshed`);scrollToRow('auto')}
 function renderCounts(c){const detail=state.rootMode==='classification'?c.classes:c.folders;const detailTitle=state.rootMode==='classification'?'Classes':'Folders';$('counts').innerHTML=`<div class=stats><div class=stat>Total<br><b>${c.total}</b></div><div class=stat>${detailTitle}<br><b>${Object.keys(detail||{}).length}</b></div><div class=stat>Sources<br><b>${esc(Object.keys(c.sources).join(', ')||'-')}</b></div></div><pre>${esc(JSON.stringify(detail||{},null,2))}</pre>`}
 function renderGrid(){
   const cols=columnsPerRow();
   $('grid').innerHTML=state.items.map((it,idx)=>{
     const p=state.preds[it.id];
     const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';
-    const detector=p&&p.detector_loaded?`<div class=small>YOLO egg ${esc(p.egg_count)} Â· fish ${esc(p.fish_count)}<br>fusion ${esc(p.fusion_class)} Â· ${esc(p.fusion_reason)}</div>`:(p&&p.detector_error?`<div class="small bad">YOLO error: ${esc(p.detector_error)}</div>`:'');
+    const detector=p&&p.detector_loaded?`<div class=small>YOLO egg ${esc(p.egg_count)} · fish ${esc(p.fish_count)}<br>fusion ${esc(p.fusion_class)} · ${esc(p.fusion_reason)}</div>`:(p&&p.detector_error?`<div class="small bad">YOLO error: ${esc(p.detector_error)}</div>`:'');
     const row=Math.floor(idx/cols);
     const keyIndex=idx%cols;
     const key=keyIndex===9?'0':String(keyIndex+1);
     const active=row===state.cursorRow;
-    return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}" loading="lazy"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} Â· margin ${esc(p.margin)}</div>${detector}<div class=row><button data-fb="yes">Model dung</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`;
+    return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}" loading="lazy"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div>${detector}<div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`;
   }).join('');
   document.querySelectorAll('.card').forEach(card=>{
     card.onclick=e=>{
@@ -780,9 +782,9 @@ function renderGrid(){
   });
   updateQueueStatus();
 }
-async function act(action,extra={}){const ids=[...state.selected];if(!ids.length){alert('ChÆ°a chá»n áº£nh');return}setLoading(true);status(`Äang xá»­ lÃ½ ${ids.length} áº£nh...`);try{const d=await api('/api/batch-action',{action,item_ids:ids,...extra});await load({keepRow:true});status(`ÄÃ£ xá»­ lÃ½ ${d.processed} áº£nh`)}catch(e){status('Lá»—i: '+e.message)}finally{setLoading(false)}}
-async function actVisible(action,extra={}){const ids=state.items.map(x=>x.id);if(!ids.length){alert('KhÃ´ng cÃ³ áº£nh visible');return}setLoading(true);status(`Äang xá»­ lÃ½ ${ids.length} áº£nh visible...`);try{const d=await api('/api/batch-action',{action,item_ids:ids,...extra});await load({keepRow:true});status(`ÄÃ£ xá»­ lÃ½ ${d.processed} áº£nh visible`)}catch(e){status('Lá»—i: '+e.message)}finally{setLoading(false)}}
-async function predict(){const ids=state.items.map(x=>x.id);if(!ids.length)return;setLoading(true);status(`Predict ${ids.length} áº£nh visible...`);const d=await api('/api/predict',{item_ids:ids,threshold:Number($('threshold').value)});state.preds={};for(const p of d.predictions)state.preds[p.id]=p;const counts={};for(const p of d.predictions)counts[p.decision]=(counts[p.decision]||0)+1;$('modelStats').textContent=JSON.stringify(counts);renderGrid();status('Predict xong');setLoading(false)}
+async function act(action,extra={}){const ids=[...state.selected];if(!ids.length){alert('Chưa chọn ảnh');return}setLoading(true);status(`Đang xử lý ${ids.length} ảnh...`);try{const d=await api('/api/batch-action',{action,item_ids:ids,...extra});await load({keepRow:true});status(`Đã xử lý ${d.processed} ảnh`)}catch(e){status('Lỗi: '+e.message)}finally{setLoading(false)}}
+async function actVisible(action,extra={}){const ids=state.items.map(x=>x.id);if(!ids.length){alert('Không có ảnh visible');return}setLoading(true);status(`Đang xử lý ${ids.length} ảnh visible...`);try{const d=await api('/api/batch-action',{action,item_ids:ids,...extra});await load({keepRow:true});status(`Đã xử lý ${d.processed} ảnh visible`)}catch(e){status('Lỗi: '+e.message)}finally{setLoading(false)}}
+async function predict(){const ids=state.items.map(x=>x.id);if(!ids.length)return;setLoading(true);status(`Predict ${ids.length} ảnh visible...`);const d=await api('/api/predict',{item_ids:ids,threshold:Number($('threshold').value)});state.preds={};for(const p of d.predictions)state.preds[p.id]=p;const counts={};for(const p of d.predictions)counts[p.decision]=(counts[p.decision]||0)+1;$('modelStats').textContent=JSON.stringify(counts);renderGrid();status('Predict xong');setLoading(false)}
 async function feedback(id,val){const it=state.items.find(x=>x.id===id),p=state.preds[id]||{};await api('/api/feedback',{timestamp:new Date().toISOString(),item_id:id,current_class:it.class_name,model_top1:p.top1||'',is_correct:val,correct_class:val==='yes'?p.top1:'',note:''});status('Saved feedback')}
 const rootChanged=async()=>{await syncRootFilters();await load({keepRow:false})};
 const filterChanged=()=>load({keepRow:false});

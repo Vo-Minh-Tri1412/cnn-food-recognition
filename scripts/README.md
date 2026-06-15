@@ -20,6 +20,7 @@ The project now keeps only active scripts in purpose-specific folders.
 - `04_build_yolo_dataset.py`: build the base YOLO egg/fish dataset from deduped Roboflow exports.
 - `05_build_yolo_shared_negatives.py`: add safe reviewed classification images as empty-label YOLO hard negatives.
 - `06_package_yolo_dataset.py`: package YOLO dataset zip for cloud training.
+- `07_collect_cookpad_candidates.py`: collect class-aware Cookpad candidates into `data/inbox/review` with text filtering, model gate, optional YOLO fish gate, hash-cache dedupe, and `--max-considered` run caps.
 
 ## train
 
