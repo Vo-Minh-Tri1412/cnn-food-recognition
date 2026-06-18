@@ -15,6 +15,8 @@ class CropRegion:
     w: int
     h: int
     label: str | None = None
+    source: str = "manual"
+    confidence: float | None = None
 
 
 def clamp_region(region: CropRegion, image_width: int, image_height: int) -> CropRegion:
@@ -22,11 +24,11 @@ def clamp_region(region: CropRegion, image_width: int, image_height: int) -> Cro
     y = max(0, min(region.y, image_height - 1))
     w = max(1, min(region.w, image_width - x))
     h = max(1, min(region.h, image_height - y))
-    return CropRegion(region.name, x, y, w, h, region.label)
+    return CropRegion(region.name, x, y, w, h, region.label, region.source, region.confidence)
 
 
 def five_compartment_template(image_width: int, image_height: int) -> list[CropRegion]:
-    """Approximate regions for common HCMUS metal trays.
+    """Approximate regions for common UEH metal trays.
 
     This is a starting point for MVP demos. For accurate crops, create a JSON
     file with manual regions from scripts/cli/01_crop_tray.py --interactive.
@@ -52,7 +54,7 @@ def five_compartment_template(image_width: int, image_height: int) -> list[CropR
             ("bottom_right", 0.43, 0.59, 0.52, 0.32),
         ]
     return [
-        CropRegion(name, int(rx * w), int(ry * h), int(rw * w), int(rh * h))
+        CropRegion(name, int(rx * w), int(ry * h), int(rw * w), int(rh * h), source="template")
         for name, rx, ry, rw, rh in rel_regions
     ]
 
@@ -68,6 +70,8 @@ def load_regions(path: Path) -> list[CropRegion]:
             w=int(item["w"]),
             h=int(item["h"]),
             label=item.get("label"),
+            source=str(item.get("source") or "template"),
+            confidence=float(item["confidence"]) if item.get("confidence") is not None else None,
         )
         for idx, item in enumerate(regions)
     ]
@@ -84,6 +88,8 @@ def save_regions(path: Path, regions: list[CropRegion]) -> None:
                 "w": r.w,
                 "h": r.h,
                 **({"label": r.label} if r.label else {}),
+                "source": r.source,
+                **({"confidence": round(r.confidence, 6)} if r.confidence is not None else {}),
             }
             for r in regions
         ]
@@ -117,5 +123,5 @@ def select_regions_interactive(image_path: Path) -> list[CropRegion]:
     regions = []
     for idx, (x, y, w, h) in enumerate(rois):
         if w > 0 and h > 0:
-            regions.append(CropRegion(name=f"crop_{idx:02d}", x=int(x), y=int(y), w=int(w), h=int(h)))
+            regions.append(CropRegion(name=f"crop_{idx:02d}", x=int(x), y=int(y), w=int(w), h=int(h), source="manual"))
     return regions

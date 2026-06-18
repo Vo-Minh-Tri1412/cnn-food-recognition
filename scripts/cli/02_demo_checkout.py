@@ -13,12 +13,19 @@ if hasattr(sys.stdout, "reconfigure"):
 import torch
 from PIL import Image
 
-from canteen_checkout.config import BILLS_DIR, CROPPED_DISHES_DIR, DEFAULT_DETECTOR_PATH, DEFAULT_MODEL_PATH
+from canteen_checkout.config import (
+    BILLS_DIR,
+    CROPPED_DISHES_DIR,
+    DEFAULT_DETECTOR_PATH,
+    DEFAULT_MODEL_PATH,
+    DEFAULT_REGION_DETECTOR_PATH,
+)
 from canteen_checkout.cropping import crop_regions, five_compartment_template, load_regions
 from canteen_checkout.detector import detect_objects, empty_evidence, fuse_decision, load_yolo_detector
 from canteen_checkout.io_utils import load_prices
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 from canteen_checkout.pricing import THIT_KHO_TRUNG_CLASS, dish_price
+from canteen_checkout.region_detector import detect_food_regions
 
 
 @torch.no_grad()
@@ -39,6 +46,9 @@ def main() -> None:
     parser.add_argument("--use-detector", action="store_true", help="Use YOLO egg/fish detector fusion if the detector exists.")
     parser.add_argument("--detector-threshold", type=float, default=0.25)
     parser.add_argument("--regions-json", type=Path, default=None)
+    parser.add_argument("--region-mode", choices=("auto", "template"), default="auto")
+    parser.add_argument("--region-detector", type=Path, default=DEFAULT_REGION_DETECTOR_PATH)
+    parser.add_argument("--region-threshold", type=float, default=0.35)
     parser.add_argument("--threshold", type=float, default=0.45)
     parser.add_argument("--ignore-region", action="append", default=[], help="Region name to crop but exclude from billing. Can be repeated.")
     parser.add_argument("--out-dir", type=Path, default=None)
@@ -47,9 +57,38 @@ def main() -> None:
     image_path = args.image
     out_dir = args.out_dir or (CROPPED_DISHES_DIR / image_path.stem)
 
+    region_source = "template"
+    region_fallback_reason = ""
+    region_detector_loaded = False
     if args.regions_json:
         regions = load_regions(args.regions_json)
+        region_source = "json"
+    elif args.region_mode == "auto" and args.region_detector.exists():
+        region_model = load_yolo_detector(args.region_detector)
+        region_result = detect_food_regions(
+            region_model,
+            image_path,
+            detector_path=args.region_detector,
+            confidence=args.region_threshold,
+        )
+        region_detector_loaded = region_result.detector_loaded
+        region_fallback_reason = region_result.fallback_reason
+        if region_result.regions:
+            regions = list(region_result.regions)
+            region_source = "auto_detector"
+        else:
+            import cv2
+
+            image = cv2.imread(str(image_path))
+            if image is None:
+                raise ValueError(f"Could not read image: {image_path}")
+            h, w = image.shape[:2]
+            regions = five_compartment_template(w, h)
+            region_source = "template_fallback"
     else:
+        if args.region_mode == "auto":
+            region_fallback_reason = "model_unavailable"
+            region_source = "template_fallback"
         import cv2
 
         image = cv2.imread(str(image_path))
@@ -136,6 +175,8 @@ def main() -> None:
             {
                 "crop_path": str(crop_path),
                 "region_name": region.name,
+                "region_source": region.source,
+                "region_confidence": round(region.confidence, 4) if region.confidence is not None else None,
                 "raw_class_name": raw_class_name,
                 "raw_confidence": round(raw_confidence, 4),
                 "class_name": class_name,
@@ -162,6 +203,11 @@ def main() -> None:
         "detector_loaded": detector_loaded,
         "threshold": args.threshold,
         "detector_threshold": args.detector_threshold,
+        "region_source": region_source,
+        "region_detector_path": str(args.region_detector) if args.region_detector.exists() else None,
+        "region_detector_loaded": region_detector_loaded,
+        "region_threshold": args.region_threshold,
+        "region_fallback_reason": region_fallback_reason,
         "items": items,
         "total_vnd": total,
     }

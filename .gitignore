@@ -5,6 +5,7 @@ __pycache__/
 models/*.pt
 models/*.pth
 models/*.onnx
+/yolo*.pt
 outputs/
 data/raw_teacher_trays/
 data/demo_trays/

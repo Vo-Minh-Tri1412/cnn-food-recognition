@@ -21,11 +21,15 @@ The project now keeps only active scripts in purpose-specific folders.
 - `05_build_yolo_shared_negatives.py`: add safe reviewed classification images as empty-label YOLO hard negatives.
 - `06_package_yolo_dataset.py`: package YOLO dataset zip for cloud training.
 - `07_collect_cookpad_candidates.py`: collect class-aware Cookpad candidates into `data/inbox/review` with text filtering, model gate, optional YOLO fish gate, hash-cache dedupe, and `--max-considered` run caps.
+- `08_build_food_region_dataset.py`: build a clean one-class `food_region` YOLO dataset from immutable archived Roboflow exports; selects representative variants and deduplicates sources.
 
 ## train
 
 - `01_train_classifier.py`: train the 11-class dish classifier; supports focal loss, targeted oversampling, and per-class augmentation overrides.
 - `02_train_yolo_detector.py`: train the auxiliary YOLO egg/fish detector.
+- `03_train_food_region_detector.py`: train the automatic tray food-region detector used before dish classification.
+
+The generic `06_package_yolo_dataset.py` packages both egg/fish and food-region datasets by passing explicit `--source`, `--output`, and `--manifest` paths.
 
 ## debug
 

@@ -26,6 +26,7 @@ from canteen_checkout.config import (
     CROPPED_DISHES_DIR,
     DEFAULT_DETECTOR_PATH,
     DEFAULT_MODEL_PATH,
+    DEFAULT_REGION_DETECTOR_PATH,
     DEMO_TRAYS_DIR,
     DISH_CLASSES,
     IMAGE_EXTENSIONS,
@@ -36,6 +37,7 @@ from canteen_checkout.detector import detect_objects, empty_evidence, fuse_decis
 from canteen_checkout.io_utils import load_prices
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 from canteen_checkout.pricing import THIT_KHO_TRUNG_CLASS, dish_price
+from canteen_checkout.region_detector import detect_food_regions
 
 
 UPLOAD_DIR = DEMO_TRAYS_DIR / "uploads"
@@ -46,6 +48,7 @@ IGNORE_LABELS = {"ignore", "ignored", "unknown", "other", "extra"}
 
 MODEL_CACHE: dict[str, object] = {}
 DETECTOR_CACHE: dict[str, object] = {}
+REGION_DETECTOR_CACHE: dict[str, object] = {}
 
 
 @torch.no_grad()
@@ -99,7 +102,7 @@ def list_demo_images() -> list[dict[str, str]]:
 
 
 def list_region_templates() -> list[dict[str, str]]:
-    templates = [{"path": "", "name": "Auto 5 compartments"}]
+    templates = [{"path": "", "name": "5-compartment grid"}]
     config_dir = PROJECT_ROOT / "configs"
     if config_dir.exists():
         for path in sorted(config_dir.glob("*regions*.json")):
@@ -115,10 +118,38 @@ def image_size(path: Path) -> tuple[int, int]:
     return width, height
 
 
-def regions_from_payload(payload: dict, image_path: Path) -> list[CropRegion]:
+def serialize_region(region: CropRegion) -> dict[str, object]:
+    return {
+        "name": region.name,
+        "x": region.x,
+        "y": region.y,
+        "w": region.w,
+        "h": region.h,
+        "label": region.label or "",
+        "source": region.source,
+        "confidence": round(region.confidence, 4) if region.confidence is not None else None,
+    }
+
+
+def region_source(regions: list[CropRegion]) -> str:
+    sources = {region.source for region in regions if region.source}
+    if not sources:
+        return "manual"
+    return next(iter(sources)) if len(sources) == 1 else "mixed"
+
+
+def template_regions(payload: dict, image_path: Path) -> list[CropRegion]:
+    template = str(payload.get("template") or "")
+    if template:
+        return load_regions(resolve_project_path(template))
+    width, height = image_size(image_path)
+    return five_compartment_template(width, height)
+
+
+def regions_from_payload(payload: dict, image_path: Path) -> tuple[list[CropRegion], dict[str, object]]:
     raw_regions = payload.get("regions")
     if raw_regions:
-        return [
+        regions = [
             CropRegion(
                 name=str(item.get("name") or f"crop_{idx:02d}"),
                 x=int(item["x"]),
@@ -126,16 +157,61 @@ def regions_from_payload(payload: dict, image_path: Path) -> list[CropRegion]:
                 w=int(item["w"]),
                 h=int(item["h"]),
                 label=str(item.get("label") or "").strip() or None,
+                source=str(item.get("source") or "manual"),
+                confidence=float(item["confidence"]) if item.get("confidence") is not None else None,
             )
             for idx, item in enumerate(raw_regions)
         ]
+        metadata = dict(payload.get("region_metadata") or {})
+        metadata.update({"requested_mode": str(payload.get("region_mode") or "manual"), "region_source": region_source(regions)})
+        return regions, metadata
 
-    template = str(payload.get("template") or "")
-    if template:
-        return load_regions(resolve_project_path(template))
+    mode = str(payload.get("mode") or payload.get("region_mode") or "template")
+    threshold = float(payload.get("region_threshold", 0.35))
+    region_detector_path = resolve_project_path(str(payload.get("region_detector_path") or DEFAULT_REGION_DETECTOR_PATH))
+    metadata: dict[str, object] = {
+        "requested_mode": mode,
+        "region_source": "template",
+        "region_detector_path": relative_or_absolute(region_detector_path) if region_detector_path.exists() else None,
+        "region_detector_loaded": False,
+        "region_threshold": threshold,
+        "raw_detection_count": 0,
+        "fallback_reason": "",
+    }
+    if mode == "auto":
+        if region_detector_path.exists():
+            try:
+                detector = load_region_detector_once(region_detector_path)
+                result = detect_food_regions(
+                    detector,
+                    image_path,
+                    detector_path=region_detector_path,
+                    confidence=threshold,
+                )
+                metadata.update(
+                    {
+                        "region_detector_loaded": result.detector_loaded,
+                        "raw_detection_count": result.raw_detection_count,
+                        "fallback_reason": result.fallback_reason,
+                    }
+                )
+                if result.regions:
+                    regions = list(result.regions)
+                    metadata["region_source"] = "auto_detector"
+                    return regions, metadata
+            except Exception as exc:
+                metadata["fallback_reason"] = f"detector_error:{type(exc).__name__}"
+        else:
+            metadata["fallback_reason"] = "model_unavailable"
 
-    width, height = image_size(image_path)
-    return five_compartment_template(width, height)
+    regions = template_regions(payload, image_path)
+    if mode == "auto":
+        regions = [
+            CropRegion(region.name, region.x, region.y, region.w, region.h, region.label, "template_fallback", region.confidence)
+            for region in regions
+        ]
+        metadata["region_source"] = "template_fallback"
+    return regions, metadata
 
 
 def load_model_once(model_path: Path):
@@ -160,6 +236,16 @@ def load_detector_once(detector_path: Path):
     return detector
 
 
+def load_region_detector_once(detector_path: Path):
+    key = str(detector_path.resolve())
+    cached = REGION_DETECTOR_CACHE.get(key)
+    if cached:
+        return cached
+    detector = load_yolo_detector(detector_path)
+    REGION_DETECTOR_CACHE[key] = detector
+    return detector
+
+
 def run_checkout(payload: dict) -> dict:
     image_path = resolve_project_path(str(payload["image_path"]))
     if not image_path.exists():
@@ -172,7 +258,7 @@ def run_checkout(payload: dict) -> dict:
     use_detector = bool(payload.get("use_detector", True))
     detector_threshold = float(payload.get("detector_threshold", 0.25))
     threshold = float(payload.get("threshold", 0.55))
-    regions = regions_from_payload(payload, image_path)
+    regions, region_metadata = regions_from_payload(payload, image_path)
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
     out_dir = CROPPED_DISHES_DIR / f"{image_path.stem}_{run_id}"
@@ -247,6 +333,8 @@ def run_checkout(payload: dict) -> dict:
                 "crop_path": relative_or_absolute(crop_path),
                 "crop_url": f"/file?path={relative_or_absolute(crop_path)}",
                 "region_name": region.name,
+                "region_source": region.source,
+                "region_confidence": round(region.confidence, 4) if region.confidence is not None else None,
                 "raw_class_name": raw_class_name,
                 "raw_confidence": round(raw_confidence, 4),
                 "class_name": class_name,
@@ -274,6 +362,11 @@ def run_checkout(payload: dict) -> dict:
         "use_detector": use_detector,
         "threshold": threshold,
         "detector_threshold": detector_threshold,
+        "region_source": region_metadata.get("region_source", region_source(regions)),
+        "region_detector_path": region_metadata.get("region_detector_path"),
+        "region_detector_loaded": bool(region_metadata.get("region_detector_loaded", False)),
+        "region_threshold": float(region_metadata.get("region_threshold", payload.get("region_threshold", 0.35))),
+        "region_fallback_reason": str(region_metadata.get("fallback_reason") or ""),
         "items": items,
         "total_vnd": total,
     }
@@ -315,6 +408,8 @@ def app_state() -> dict:
         },
         "default_model_path": relative_or_absolute(DEFAULT_MODEL_PATH),
         "default_detector_path": relative_or_absolute(DEFAULT_DETECTOR_PATH) if DEFAULT_DETECTOR_PATH.exists() else "",
+        "default_region_detector_path": relative_or_absolute(DEFAULT_REGION_DETECTOR_PATH) if DEFAULT_REGION_DETECTOR_PATH.exists() else "",
+        "region_detector_available": DEFAULT_REGION_DETECTOR_PATH.exists(),
     }
 
 
@@ -411,14 +506,12 @@ class DemoHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/regions":
                 image_path = resolve_project_path(str(payload["image_path"]))
-                regions = regions_from_payload(payload, image_path)
+                regions, metadata = regions_from_payload(payload, image_path)
                 self.send_json(
                     {
                         "ok": True,
-                        "regions": [
-                            {"name": r.name, "x": r.x, "y": r.y, "w": r.w, "h": r.h, "label": r.label or ""}
-                            for r in regions
-                        ],
+                        "regions": [serialize_region(region) for region in regions],
+                        **metadata,
                     }
                 )
                 return

@@ -11,6 +11,7 @@ const state = {
   drag: null,
   zoom: 1,
   total: 0,
+  regionMeta: {},
 };
 
 function setStatus(text) {
@@ -60,7 +61,8 @@ async function init() {
   if (badge) {
     const classifierReady = state.app.default_model_path ? "Classifier ready" : "Classifier missing";
     const detectorReady = state.app.default_detector_path ? "Detector ready" : "Detector missing";
-    badge.textContent = `${classifierReady} · ${detectorReady}`;
+    const regionReady = state.app.default_region_detector_path ? "Region AI ready" : "Region AI missing";
+    badge.textContent = `${classifierReady} · ${regionReady} · ${detectorReady}`;
   }
 
   if (state.app.images.length) {
@@ -88,8 +90,7 @@ async function loadImage(path) {
   if (titleEl) titleEl.textContent = path.split(/[\\/]/).pop();
   state.zoom = 1;
   $("zoomInput").value = "1";
-  await applyTemplate();
-  setStatus("Image loaded");
+  await applyAutoRegions();
 }
 
 function fitWidth() {
@@ -257,11 +258,34 @@ async function applyTemplate() {
   if (!state.imagePath) return;
   const data = await api("/api/regions", {
     image_path: state.imagePath,
+    mode: "template",
     template: $("templateSelect").value,
   });
   state.regions = data.regions;
+  state.regionMeta = data;
   state.selected = state.regions.length ? 0 : -1;
   draw();
+  setStatus("Grid regions ready");
+}
+
+async function applyAutoRegions() {
+  if (!state.imagePath) return;
+  setStatus("Detecting food regions...");
+  const data = await api("/api/regions", {
+    image_path: state.imagePath,
+    mode: "auto",
+    region_threshold: 0.35,
+    template: $("templateSelect").value,
+  });
+  state.regions = data.regions;
+  state.regionMeta = data;
+  state.selected = state.regions.length ? 0 : -1;
+  draw();
+  if (data.region_source === "auto_detector") {
+    setStatus(`AI found ${state.regions.length} food regions`);
+  } else {
+    setStatus(`Using grid fallback: ${data.fallback_reason || "detector unavailable"}`);
+  }
 }
 
 function addRegion() {
@@ -525,6 +549,9 @@ async function runCheckout() {
     const bill = await api("/api/run", {
       image_path: state.imagePath,
       regions: state.regions,
+      region_mode: state.regionMeta.requested_mode || "manual",
+      region_metadata: state.regionMeta,
+      region_threshold: 0.35,
       threshold: thresholdInput ? Number(thresholdInput.value || 0.55) : 0.55,
       use_detector: true,
       detector_threshold: 0.25,
@@ -570,6 +597,7 @@ function nudgeSelected(event) {
 $("loadImageBtn").addEventListener("click", () => loadImage($("imageSelect").value).catch(showError));
 $("imageSelect").addEventListener("change", () => loadImage($("imageSelect").value).catch(showError));
 $("applyTemplateBtn").addEventListener("click", () => applyTemplate().catch(showError));
+$("autoRegionBtn").addEventListener("click", () => applyAutoRegions().catch(showError));
 $("addRegionBtn").addEventListener("click", addRegion);
 $("duplicateRegionBtn").addEventListener("click", duplicateRegion);
 $("deleteRegionBtn").addEventListener("click", deleteRegion);

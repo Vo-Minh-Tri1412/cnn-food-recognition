@@ -10,10 +10,12 @@ Use these folders for normal work:
 data/reviewed/<class>/                 trusted manually reviewed image pool
 data/classification/train|val|test/    generated classifier dataset
 data/detection/egg_fish_shared/        generated YOLO egg/fish dataset with reviewed hard negatives
+data/detection/food_regions/           generated one-class automatic crop dataset
 data/inbox/review/<batch>/             new images waiting for Data IDE review
 data/extras/<label>/                   useful images outside the official 11 classes
 data/quarantine/<reason>/              rejected, duplicate, or label-conflict images
 data/demo/                             demo uploads and tray images
+data/archive/raw_tray_datasets_*/      immutable CC BY 4.0 Roboflow tray exports
 ```
 
 ## Ignore During Normal Work
@@ -34,6 +36,7 @@ The cloud notebook should use zip artifacts from `outputs/cloud/` or Google Driv
 ```text
 outputs/cloud/classification.zip
 outputs/cloud/egg_fish_shared_yolo.zip
+outputs/cloud/food_regions_yolo.zip
 ```
 
 Recommended one-shot publish to Google Drive for desktop:
@@ -57,4 +60,13 @@ MyDrive/canteen_checkout/
 - Use Data IDE to move trusted images into `data/reviewed/`.
 - Rebuild `data/classification/` from `data/reviewed/`.
 - Rebuild `data/detection/egg_fish_shared/` from YOLO positives plus safe reviewed negatives.
+- Rebuild `data/detection/food_regions/` with `scripts/data/08_build_food_region_dataset.py`; never edit the Roboflow archive in place.
 - Never manually edit `data/classification/` as the long-term source of truth.
+
+## Roboflow Cleanup Contract
+
+- `Khay_thuc_an_4`, `Khay_thuc_an_2`, and `Khay_thuc_an` are normalized to one `food_region` class.
+- `Khay_thuc_an_3` is audited but excluded by default because it labels fixed four-compartment grids, including potentially empty regions.
+- One representative is selected per Roboflow source group using black-border ratio, blur score, and deterministic filename ordering.
+- Exact and perceptual duplicates are removed globally while preserving the higher-priority source.
+- Stretch-resized images cannot be restored to their original aspect ratio; the archive remains unchanged for traceability and CC BY 4.0 attribution.

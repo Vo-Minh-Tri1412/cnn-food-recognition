@@ -573,9 +573,10 @@ input[type="range"] {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
-.toolbar-actions { display: flex; gap: 6px; }
+.toolbar-actions { display: flex; align-items: center; gap: 8px; }
 .icon-btn { width: auto; min-width: 56px; padding: 0 10px; }
 
 /* ─── Viewport — auto-scaling image ─── */

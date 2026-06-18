@@ -53,6 +53,7 @@
           <div class="toolbar-left">
             <div class="eyebrow">Crops Tools</div>
             <div class="crop-tools">
+              <button id="autoRegionBtn" class="btn btn-primary icon-btn" type="button" title="Detect food regions with AI">AI Auto</button>
               <select id="templateSelect" class="hud-input"></select>
               <button id="applyTemplateBtn" class="btn btn-secondary icon-btn" type="button" title="Apply selected preset">Preset</button>
               <button id="addRegionBtn" class="btn btn-secondary icon-btn" type="button" title="Add crop">Add</button>
@@ -64,6 +65,7 @@
             </div>
           </div>
           <div class="toolbar-actions">
+            <span id="status" class="status-text">Waiting</span>
             <button id="fitBtn" class="btn btn-secondary icon-btn" type="button" title="Fit image">Fit</button>
             <button id="clearBillBtn" class="btn btn-secondary icon-btn" type="button" title="Clear bill">Clear</button>
           </div>

@@ -21,6 +21,7 @@ MODEL_FILES = [
     "dish_classifier.pt",
     "class_names.json",
     "egg_fish_detector.pt",
+    "food_region_detector.pt",
 ]
 
 PACKAGE_FILES = [
@@ -30,6 +31,8 @@ PACKAGE_FILES = [
     "egg_fish_yolo.manifest.json",
     "egg_fish_shared_yolo.zip",
     "egg_fish_shared_yolo.manifest.json",
+    "food_regions_yolo.zip",
+    "food_regions_yolo.manifest.json",
 ]
 
 PROJECT_FILES = [
@@ -324,7 +327,7 @@ def main() -> None:
     parser.add_argument("--push-project-files", action="store_true", help="Copy the main notebook, README, requirements, and prices.csv to Drive project_files/.")
     parser.add_argument("--publish", action="store_true", help="One-shot local-to-Drive publish: packages, models, and project files.")
     parser.add_argument("--pull", action="store_true", help="One-shot Drive-to-local pull: models plus newest run/report folder.")
-    parser.add_argument("--pull-models", action="store_true", help="Copy dish_classifier.pt, class_names.json, and egg_fish_detector.pt from Drive to local models/.")
+    parser.add_argument("--pull-models", action="store_true", help="Copy classifier, food-region, and egg/fish model artifacts from Drive to local models/.")
     parser.add_argument("--pull-latest-run", action="store_true", help="Copy the newest Drive runs/<timestamp> folder to outputs/cloud/drive_runs/.")
     parser.add_argument("--all", action="store_true", help="Run push-packages, pull-models, and pull-latest-run.")
     parser.add_argument("--status", action="store_true", help="Print Drive/local artifact status.")

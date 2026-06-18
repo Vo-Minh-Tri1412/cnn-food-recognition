@@ -42,6 +42,10 @@ PRICES_CSV = PROJECT_ROOT / "prices.csv"
 CLASS_NAMES_JSON = MODELS_DIR / "class_names.json"
 DEFAULT_MODEL_PATH = MODELS_DIR / "dish_classifier.pt"
 DEFAULT_DETECTOR_PATH = MODELS_DIR / "egg_fish_detector.pt"
+DEFAULT_REGION_DETECTOR_PATH = _env_path(
+    "CANTEEN_REGION_DETECTOR_PATH",
+    MODELS_DIR / "food_region_detector.pt",
+)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from canteen_checkout.config import DEFAULT_DETECTOR_PATH, DETECTION_DIR, OUTPUTS_DIR, PROJECT_ROOT, REPORTS_DIR
+from canteen_checkout.config import DEFAULT_REGION_DETECTOR_PATH, DETECTION_DIR, OUTPUTS_DIR, PROJECT_ROOT, REPORTS_DIR
 
 
 def relative_or_absolute(path: Path) -> str:
@@ -22,11 +22,11 @@ def relative_or_absolute(path: Path) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train the YOLO egg/fish detector with Ultralytics.")
-    parser.add_argument("--data", type=Path, default=DETECTION_DIR / "egg_fish" / "data.yaml")
-    parser.add_argument("--model", default="yolo11s.pt")
-    parser.add_argument("--model-out", type=Path, default=DEFAULT_DETECTOR_PATH)
-    parser.add_argument("--project", type=Path, default=OUTPUTS_DIR / "yolo_runs")
+    parser = argparse.ArgumentParser(description="Train the one-class YOLO food-region detector with Ultralytics.")
+    parser.add_argument("--data", type=Path, default=DETECTION_DIR / "food_regions" / "data.yaml")
+    parser.add_argument("--model", default="yolo11n.pt")
+    parser.add_argument("--model-out", type=Path, default=DEFAULT_REGION_DETECTOR_PATH)
+    parser.add_argument("--project", type=Path, default=OUTPUTS_DIR / "food_region_yolo_runs")
     parser.add_argument("--name", default=None)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
@@ -42,7 +42,7 @@ def main() -> None:
 
     from ultralytics import YOLO
 
-    run_name = args.name or f"egg_fish_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_name = args.name or f"food_regions_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     project_path = args.project if args.project.is_absolute() else PROJECT_ROOT / args.project
     model = YOLO(args.model)
     train_kwargs = {
@@ -87,7 +87,7 @@ def main() -> None:
         "patience": args.patience,
         "metrics": metrics_payload,
     }
-    summary_path = REPORTS_DIR / "egg_fish_detector_training_summary.json"
+    summary_path = REPORTS_DIR / "food_region_detector_training_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
