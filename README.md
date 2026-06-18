@@ -19,7 +19,14 @@ Use the single root notebook:
 00_colab_kaggle_workflow.ipynb
 ```
 
-It covers setup, Drive/Kaggle data loading, cleaned Roboflow tray data, food-region and egg/fish YOLO training, classifier training, report reading, Grad-CAM, Demo App, Data IDE, and artifact export.
+It is a Colab-only training notebook written in Vietnamese. Common setup is kept in one section, while the dish classifier, food-region detector, and egg/fish detector each have independent data, configuration, training, evaluation, and Drive artifact sections.
+
+The artifact direction is strict:
+
+```text
+local datasets/project files -> Google Drive -> Colab training
+Colab models/runs -> Google Drive Desktop -> local models/reports
+```
 
 ## Clean Data Contract
 
@@ -159,7 +166,8 @@ Train YOLO detector:
   --data data\detection\egg_fish_shared\data.yaml `
   --model yolo11s.pt `
   --epochs 100 `
-  --batch 16
+  --batch 16 `
+  --weights-cache outputs\cache\ultralytics
 ```
 
 Train the automatic food-region detector:
@@ -169,7 +177,8 @@ Train the automatic food-region detector:
   --data data\detection\food_regions\data.yaml `
   --model yolo11s.pt `
   --epochs 100 `
-  --batch 16
+  --batch 16 `
+  --weights-cache outputs\cache\ultralytics
 ```
 
 Use `yolo11n.pt` for smoke tests or lower-latency deployment. With the current 365-image clean dataset, `yolo11s.pt` is the recommended Colab baseline; moving to `yolo11m.pt` is unlikely to fix domain shift and should wait until an independent UEH holdout shows a capacity bottleneck.
@@ -196,19 +205,19 @@ Other focused Cookpad query files:
 - `configs/cookpad_trung_chien_queries.txt`
 - `configs/cookpad_dau_hu_sot_ca_queries.txt`
 
-Publish clean artifacts to Google Drive Desktop:
+Push dataset packages and project files to Google Drive Desktop. This command never pushes local models:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --publish --apply
+.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --push-inputs --apply
 ```
 
-Pull trained models and the newest report/run folder back from Drive:
+Pull canonical models plus the newest run for each model back from Drive:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --pull --apply
+.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --pull-results --apply
 ```
 
-Use `--pull-models --apply` only when you intentionally want weights without reports. Full pulled reports are stored under `outputs/cloud/drive_runs/<timestamp>/`.
+Use `--push-models` only for an intentional recovery operation. Colab writes canonical weights to `Drive/models/` and run artifacts to `Drive/runs/<model>/<timestamp>/`; pulled reports are stored under `outputs/cloud/drive_runs/<model>/<timestamp>/`.
 
 ## Billing Classes
 

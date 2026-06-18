@@ -44,6 +44,8 @@ PROJECT_FILES = [
     "prices.csv",
 ]
 
+RUN_KINDS = ("classifier", "food_region", "egg_fish")
+
 
 def relative_or_absolute(path: Path) -> str:
     try:
@@ -80,7 +82,7 @@ def candidate_drive_roots() -> list[Path]:
             [
                 drive / "My Drive" / "canteen_checkout",
                 drive / "MyDrive" / "canteen_checkout",
-                drive / "Drive cá»§a tÃ´i" / "canteen_checkout",
+                drive / "Drive của tôi" / "canteen_checkout",
             ]
         )
 
@@ -139,12 +141,12 @@ def find_drive_file(drive_root: Path, filename: str) -> Path | None:
     return newest_path(list(runs_dir.rglob(filename)))
 
 
-def latest_run_dir(drive_root: Path) -> Path | None:
-    runs_dir = drive_root / "runs"
+def latest_model_run(drive_root: Path, run_kind: str) -> Path | None:
+    runs_dir = drive_root / "runs" / run_kind
     if not runs_dir.exists():
         return None
     runs = [path for path in runs_dir.iterdir() if path.is_dir()]
-    return newest_path(runs)
+    return max(runs, key=lambda path: path.name) if runs else None
 
 
 def report_files_in_run(run_dir: Path) -> list[str]:
@@ -251,22 +253,29 @@ def pull_models(drive_root: Path, *, apply: bool, overwrite: bool) -> list[dict[
     return rows
 
 
-def pull_latest_run(drive_root: Path, *, apply: bool) -> list[dict[str, object]]:
-    run_dir = latest_run_dir(drive_root)
-    if run_dir is None:
-        return [
-            {
-                "action": "pull_latest_run",
-                "source": "",
-                "target": relative_or_absolute(OUTPUTS_DIR / "cloud" / "drive_runs"),
-                "status": "missing_source",
-            }
-        ]
-    target = OUTPUTS_DIR / "cloud" / "drive_runs" / run_dir.name
-    row = copy_tree(run_dir, target, apply=apply)
-    row["run_name"] = run_dir.name
-    row["report_files"] = report_files_in_run(run_dir)
-    return [row]
+def pull_latest_runs(drive_root: Path, *, apply: bool) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for run_kind in RUN_KINDS:
+        run_dir = latest_model_run(drive_root, run_kind)
+        target_root = OUTPUTS_DIR / "cloud" / "drive_runs" / run_kind
+        if run_dir is None:
+            rows.append(
+                {
+                    "action": "pull_latest_run",
+                    "source": "",
+                    "target": relative_or_absolute(target_root),
+                    "status": "missing_source",
+                    "run_kind": run_kind,
+                }
+            )
+            continue
+        target = target_root / run_dir.name
+        row = copy_tree(run_dir, target, apply=apply)
+        row["run_kind"] = run_kind
+        row["run_name"] = run_dir.name
+        row["report_files"] = report_files_in_run(run_dir)
+        rows.append(row)
+    return rows
 
 
 def status_payload(drive_root: Path) -> dict[str, object]:
@@ -300,15 +309,32 @@ def status_payload(drive_root: Path) -> dict[str, object]:
         }
         for filename in PROJECT_FILES
     }
-    run_dir = latest_run_dir(drive_root)
+    latest_runs = {run_kind: latest_model_run(drive_root, run_kind) for run_kind in RUN_KINDS}
     return {
         "drive_root": str(drive_root),
         "drive_models": drive_models,
         "local_models": local_models,
         "packages": packages,
         "project_files": project_files,
-        "latest_drive_run": str(run_dir) if run_dir else "",
-        "latest_drive_run_reports": report_files_in_run(run_dir) if run_dir else [],
+        "latest_drive_runs": {
+            run_kind: {
+                "path": str(run_dir) if run_dir else "",
+                "report_files": report_files_in_run(run_dir) if run_dir else [],
+            }
+            for run_kind, run_dir in latest_runs.items()
+        },
+    }
+
+
+def requested_operations(args: argparse.Namespace) -> dict[str, bool]:
+    push_inputs = args.push_inputs or args.publish or args.all
+    pull_results = args.pull_results or args.pull or args.all
+    return {
+        "push_packages": push_inputs or args.push_packages,
+        "push_project_files": push_inputs or args.push_project_files,
+        "push_models": args.push_models,
+        "pull_models": pull_results or args.pull_models,
+        "pull_latest_runs": pull_results or args.pull_latest_runs or args.pull_latest_run,
     }
 
 
@@ -325,11 +351,14 @@ def main() -> None:
     parser.add_argument("--push-packages", action="store_true", help="Copy outputs/cloud/*.zip and manifests to Drive datasets/.")
     parser.add_argument("--push-models", action="store_true", help="Copy local models/*.pt and class_names.json to Drive models/.")
     parser.add_argument("--push-project-files", action="store_true", help="Copy the main notebook, README, requirements, and prices.csv to Drive project_files/.")
-    parser.add_argument("--publish", action="store_true", help="One-shot local-to-Drive publish: packages, models, and project files.")
-    parser.add_argument("--pull", action="store_true", help="One-shot Drive-to-local pull: models plus newest run/report folder.")
+    parser.add_argument("--push-inputs", action="store_true", help="Copy dataset packages and project files to Drive; never copies local models.")
+    parser.add_argument("--publish", action="store_true", help="Deprecated alias for --push-inputs.")
+    parser.add_argument("--pull-results", action="store_true", help="Copy canonical models and the newest run for each model from Drive to local.")
+    parser.add_argument("--pull", action="store_true", help="Alias for --pull-results.")
     parser.add_argument("--pull-models", action="store_true", help="Copy classifier, food-region, and egg/fish model artifacts from Drive to local models/.")
-    parser.add_argument("--pull-latest-run", action="store_true", help="Copy the newest Drive runs/<timestamp> folder to outputs/cloud/drive_runs/.")
-    parser.add_argument("--all", action="store_true", help="Run push-packages, pull-models, and pull-latest-run.")
+    parser.add_argument("--pull-latest-runs", action="store_true", help="Copy the newest Drive run for classifier, food-region, and egg/fish.")
+    parser.add_argument("--pull-latest-run", action="store_true", help="Deprecated alias for --pull-latest-runs.")
+    parser.add_argument("--all", action="store_true", help="Run --push-inputs and --pull-results.")
     parser.add_argument("--status", action="store_true", help="Print Drive/local artifact status.")
     parser.add_argument("--apply", action="store_true", help="Actually copy files. Without this, the script only prints a dry-run plan.")
     parser.add_argument("--no-overwrite", action="store_true", help="Do not overwrite existing targets.")
@@ -338,31 +367,37 @@ def main() -> None:
     drive_root = resolve_drive_root(args.drive_root)
     overwrite = not args.no_overwrite
     actions: list[dict[str, object]] = []
+    operations = requested_operations(args)
+    if args.publish:
+        print("warning: --publish is deprecated; using the safe --push-inputs behavior (models are not pushed).", file=sys.stderr)
 
     if args.status or not any(
         [
             args.push_packages,
             args.push_models,
             args.push_project_files,
+            args.push_inputs,
             args.publish,
+            args.pull_results,
             args.pull,
             args.pull_models,
+            args.pull_latest_runs,
             args.pull_latest_run,
             args.all,
         ]
     ):
         actions.append({"action": "status", "status": "ok", **status_payload(drive_root)})
 
-    if args.all or args.publish or args.push_packages:
+    if operations["push_packages"]:
         actions.extend(push_packages(drive_root, apply=args.apply, overwrite=overwrite))
-    if args.publish or args.push_models:
+    if operations["push_models"]:
         actions.extend(push_models(drive_root, apply=args.apply, overwrite=overwrite))
-    if args.publish or args.push_project_files:
+    if operations["push_project_files"]:
         actions.extend(push_project_files(drive_root, apply=args.apply, overwrite=overwrite))
-    if args.all or args.pull or args.pull_models:
+    if operations["pull_models"]:
         actions.extend(pull_models(drive_root, apply=args.apply, overwrite=overwrite))
-    if args.all or args.pull or args.pull_latest_run:
-        actions.extend(pull_latest_run(drive_root, apply=args.apply))
+    if operations["pull_latest_runs"]:
+        actions.extend(pull_latest_runs(drive_root, apply=args.apply))
 
     payload = {
         "created_at": datetime.now().isoformat(timespec="seconds"),

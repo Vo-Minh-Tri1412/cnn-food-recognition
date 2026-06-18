@@ -39,10 +39,10 @@ outputs/cloud/egg_fish_shared_yolo.zip
 outputs/cloud/food_regions_yolo.zip
 ```
 
-Recommended one-shot publish to Google Drive for desktop:
+Recommended input-only push to Google Drive for desktop:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --publish --apply
+.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --push-inputs --apply
 ```
 
 The Drive destination is:
@@ -52,7 +52,13 @@ MyDrive/canteen_checkout/
   datasets/
   models/
   project_files/
+  runs/
+    classifier/<timestamp>/
+    food_region/<timestamp>/
+    egg_fish/<timestamp>/
 ```
+
+Dataset packages and project files move from local to Drive. Trained models and run reports move from Drive back to local with `--pull-results --apply`; local models are never included in `--push-inputs`.
 
 ## Rule Of Thumb
 
