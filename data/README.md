@@ -2,6 +2,18 @@
 
 This project keeps old scrape/import history for traceability, but the working data contract is intentionally small.
 
+## DVC Sources
+
+The source-of-truth snapshots are tracked by these pointer files:
+
+```text
+data/reviewed.dvc
+data/archive/raw_tray_datasets_20260610_174513.dvc
+data/download/roboflow_yolo_deduped/20260612_181500.dvc
+```
+
+Restore them with `.\.venv-dvc\Scripts\dvc.exe pull`. Build parameters live in `params.yaml`; run `.\.venv-dvc\Scripts\dvc.exe repro` to regenerate datasets, reports, ZIP files, manifests, and `dvc.lock`. DVC caches generated dataset directories, while cloud ZIP/manifest outputs use `cache: false` because they are reproducible delivery artifacts.
+
 ## Clean Working Folders
 
 Use these folders for normal work:
@@ -59,6 +71,10 @@ MyDrive/canteen_checkout/
 ```
 
 Dataset packages and project files move from local to Drive. Trained models and run reports move from Drive back to local with `--pull-results --apply`; local models are never included in `--push-inputs`.
+
+Run `dvc push` before `--push-inputs --apply`: DVC publishes source/build cache through the Google Drive API, while the sync script publishes Colab-ready packages through Google Drive Desktop. These are separate responsibilities.
+
+If Google blocks the shared `dvc-gdrive` OAuth application, configure a personal Desktop OAuth client with `dvc remote modify --local gdrive gdrive_client_id ...` and `gdrive_client_secret ...`. The resulting `.dvc/config.local` must remain untracked.
 
 ## Rule Of Thumb
 

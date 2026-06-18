@@ -1,0 +1,180 @@
+stages:
+  build_classification:
+    cmd: >-
+      python scripts/data/01_build_classification_dataset.py
+      --old-source ${classification.old_source}
+      --reviewed-source ${classification.reviewed_source}
+      --out ${classification.output}
+      --train-ratio ${classification.train_ratio}
+      --val-ratio ${classification.val_ratio}
+      --test-ratio ${classification.test_ratio}
+      --seed ${classification.seed}
+      --image-size ${classification.image_size}
+      --mode ${classification.resize_mode}
+      --duplicate-hamming ${classification.duplicate_hamming}
+      --cross-class-hamming ${classification.cross_class_hamming}
+      --min-reviewed-per-class ${classification.min_reviewed_per_class}
+      --clear --clear-all
+      --report outputs/reports/weighted_classification_dataset_report.csv
+    deps:
+      - ${classification.reviewed_source}
+      - scripts/data/01_build_classification_dataset.py
+      - canteen_checkout/config.py
+    params:
+      - classification
+    outs:
+      - ${classification.output}
+      - outputs/reports/weighted_classification_dataset_report.csv:
+          cache: false
+    metrics:
+      - outputs/reports/weighted_classification_dataset_report.summary.json:
+          cache: false
+
+  audit_classification:
+    cmd: >-
+      python scripts/data/02_audit_dataset_conflicts.py
+      --root ${classification.output}
+      --phash-threshold ${classification.cross_class_hamming}
+      --out outputs/reports/dataset_conflicts.csv
+      --summary outputs/reports/dataset_conflicts.summary.json
+    deps:
+      - ${classification.output}
+      - scripts/data/02_audit_dataset_conflicts.py
+    params:
+      - classification.cross_class_hamming
+    outs:
+      - outputs/reports/dataset_conflicts.csv:
+          cache: false
+    metrics:
+      - outputs/reports/dataset_conflicts.summary.json:
+          cache: false
+
+  package_classification:
+    cmd: >-
+      python scripts/data/03_package_classification_dataset.py
+      --source ${classification.output}
+      --output ${packages.classification_zip}
+      --manifest ${packages.classification_manifest}
+    deps:
+      - ${classification.output}
+      - scripts/data/03_package_classification_dataset.py
+    params:
+      - packages.classification_zip
+      - packages.classification_manifest
+    outs:
+      - ${packages.classification_zip}:
+          cache: false
+      - ${packages.classification_manifest}:
+          cache: false
+
+  build_egg_fish:
+    cmd: >-
+      python scripts/data/04_build_yolo_dataset.py
+      --source ${egg_fish.source}
+      --out ${egg_fish.output}
+      --phash-threshold ${egg_fish.phash_threshold}
+      --clear
+    deps:
+      - ${egg_fish.source}
+      - scripts/data/04_build_yolo_dataset.py
+      - canteen_checkout/config.py
+    params:
+      - egg_fish.source
+      - egg_fish.output
+      - egg_fish.phash_threshold
+    outs:
+      - ${egg_fish.output}
+      - outputs/reports/egg_fish_dataset_report.csv:
+          cache: false
+    metrics:
+      - outputs/reports/egg_fish_dataset_report.json:
+          cache: false
+
+  add_egg_fish_negatives:
+    cmd: >-
+      python scripts/data/05_build_yolo_shared_negatives.py
+      --base ${egg_fish.output}
+      --reviewed ${classification.reviewed_source}
+      --out ${egg_fish.shared_output}
+      --max-per-class ${egg_fish.hard_negative_max_per_class}
+      --seed ${egg_fish.seed}
+      --phash-threshold ${egg_fish.phash_threshold}
+      --image-size ${egg_fish.image_size}
+      --clear
+    deps:
+      - ${egg_fish.output}
+      - ${classification.reviewed_source}
+      - scripts/data/05_build_yolo_shared_negatives.py
+    params:
+      - egg_fish.shared_output
+      - egg_fish.hard_negative_max_per_class
+      - egg_fish.seed
+      - egg_fish.phash_threshold
+      - egg_fish.image_size
+    outs:
+      - ${egg_fish.shared_output}
+      - outputs/reports/egg_fish_shared_negatives_report.csv:
+          cache: false
+    metrics:
+      - outputs/reports/egg_fish_shared_negatives_report.json:
+          cache: false
+
+  package_egg_fish:
+    cmd: >-
+      python scripts/data/06_package_yolo_dataset.py
+      --source ${egg_fish.shared_output}
+      --output ${packages.egg_fish_zip}
+      --manifest ${packages.egg_fish_manifest}
+    deps:
+      - ${egg_fish.shared_output}
+      - scripts/data/06_package_yolo_dataset.py
+    params:
+      - packages.egg_fish_zip
+      - packages.egg_fish_manifest
+    outs:
+      - ${packages.egg_fish_zip}:
+          cache: false
+      - ${packages.egg_fish_manifest}:
+          cache: false
+
+  build_food_regions:
+    cmd: >-
+      python scripts/data/08_build_food_region_dataset.py
+      --source-root ${food_regions.source}
+      --out ${food_regions.output}
+      --min-area-ratio ${food_regions.min_area_ratio}
+      --phash-threshold ${food_regions.phash_threshold}
+      --clear
+      --report outputs/reports/food_region_dataset_report.csv
+    deps:
+      - ${food_regions.source}
+      - scripts/data/08_build_food_region_dataset.py
+      - canteen_checkout/food_region_data.py
+      - canteen_checkout/config.py
+    params:
+      - food_regions
+    outs:
+      - ${food_regions.output}
+      - outputs/reports/food_region_dataset_report.csv:
+          cache: false
+    metrics:
+      - outputs/reports/food_region_dataset_report.summary.json:
+          cache: false
+
+  package_food_regions:
+    cmd: >-
+      python scripts/data/06_package_yolo_dataset.py
+      --source ${food_regions.output}
+      --output ${packages.food_regions_zip}
+      --manifest ${packages.food_regions_manifest}
+    deps:
+      - ${food_regions.output}
+      - scripts/data/06_package_yolo_dataset.py
+    params:
+      - packages.food_regions_zip
+      - packages.food_regions_manifest
+    outs:
+      - ${packages.food_regions_zip}:
+          cache: false
+      - ${packages.food_regions_manifest}:
+          cache: false

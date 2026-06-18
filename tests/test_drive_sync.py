@@ -51,6 +51,16 @@ class DriveSyncTests(unittest.TestCase):
                 path.mkdir(parents=True)
             self.assertEqual(drive_sync.latest_model_run(drive_root, "food_region"), newer)
 
+    def test_project_files_include_dvc_lineage(self):
+        for filename in (
+            "requirements-dvc.txt",
+            "params.yaml",
+            "dvc.yaml",
+            "dvc.lock",
+            "data/reviewed.dvc",
+        ):
+            self.assertIn(filename, drive_sync.PROJECT_FILES)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,5 @@
 .venv/
+.venv-dvc/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
@@ -14,13 +15,17 @@ data/reviewed/
 data/extras/
 data/classification/
 data/downloads/
-data/download/
+data/download/*
+!data/download/roboflow_yolo_deduped/
+data/download/roboflow_yolo_deduped/*
+!data/download/roboflow_yolo_deduped/20260612_181500.dvc
 data/detection/
 data/scraped_candidates/
 data/processed_candidates/
 data/rejected_candidates/
 data/temp_teacher_crops/
-data/archive/
+data/archive/*
+!data/archive/raw_tray_datasets_20260610_174513.dvc
 data/quarantine/
 data/scraped_manifest.csv
 ultralytics/

@@ -1,0 +1,5 @@
+[core]
+    remote = gdrive
+    site_cache_dir = .dvc/tmp/site-cache
+['remote "gdrive"']
+    url = gdrive://root/canteen_checkout/dvc-storage

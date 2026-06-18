@@ -41,6 +41,13 @@ PROJECT_FILES = [
     "data/README.md",
     "scripts/README.md",
     "requirements.txt",
+    "requirements-dvc.txt",
+    "params.yaml",
+    "dvc.yaml",
+    "dvc.lock",
+    "data/reviewed.dvc",
+    "data/archive/raw_tray_datasets_20260610_174513.dvc",
+    "data/download/roboflow_yolo_deduped/20260612_181500.dvc",
     "prices.csv",
 ]
 

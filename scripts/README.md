@@ -2,6 +2,22 @@
 
 The project now keeps only active scripts in purpose-specific folders.
 
+## DVC Pipeline
+
+`dvc.yaml` connects the active data scripts into eight stages: classification build/audit/package, egg/fish build/hard-negative/package, and food-region build/package. Use the isolated environment from `requirements-dvc.txt`:
+
+```powershell
+.\.venv-dvc\Scripts\dvc.exe pull
+.\.venv-dvc\Scripts\dvc.exe status
+.\.venv-dvc\Scripts\dvc.exe repro
+.\.venv-dvc\Scripts\dvc.exe push
+.\.venv\Scripts\python.exe scripts\cloud\01_sync_drive_artifacts.py --push-inputs --apply
+```
+
+`dvc push` versions data cache. `--push-inputs` transfers the regenerated ZIP/manifest and project files for Colab. Models and `Drive/runs/` remain outside DVC.
+
+Use a personal Google Cloud Desktop OAuth client for the first DVC push. Save `gdrive_client_id` and `gdrive_client_secret` with `dvc remote modify --local`; DVC writes them to ignored `.dvc/config.local` rather than the committed remote config.
+
 ## apps
 
 - `01_demo_checkout_app.py`: browser demo app for tray checkout, local SQLite loyalty/vouchers, payment confirmation, and per-item ratings.
@@ -25,7 +41,7 @@ The project now keeps only active scripts in purpose-specific folders.
 
 ## train
 
-- `01_train_classifier.py`: train the 11-class dish classifier; supports focal loss, targeted oversampling, per-class augmentation overrides, and validation-accuracy early stopping.
+- `01_train_classifier.py`: train the 11-class dish classifier; supports focal loss, targeted oversampling, per-class augmentation overrides, validation-accuracy early stopping, and `classifier_training_summary.json`.
 - `02_train_yolo_detector.py`: train the auxiliary YOLO egg/fish detector; `--weights-cache` keeps downloaded YOLO and AMP-check weights outside the repository root.
 - `03_train_food_region_detector.py`: train the automatic tray food-region detector used before dish classification; supports the same isolated weight cache.
 
@@ -38,6 +54,8 @@ The generic `06_package_yolo_dataset.py` packages both egg/fish and food-region 
 ## cloud
 
 - `01_sync_drive_artifacts.py`: use `--push-inputs --apply` for dataset/project files and `--pull-results --apply` for canonical models plus the newest run of each model. `--push-inputs` never uploads local model weights.
+
+The Colab notebook writes `run_provenance.json` for all three models and `test_metrics.json` for both YOLO test splits. These files stay under `Drive/runs/<model>/<timestamp>/reports/` and are pulled with the rest of the run.
 
 ## Removed Legacy Scripts
 

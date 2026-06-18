@@ -1,0 +1,36 @@
+classification:
+  reviewed_source: data/reviewed
+  old_source: data/archive/empty_old_source
+  output: data/classification
+  seed: 42
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  image_size: 512
+  resize_mode: pad
+  duplicate_hamming: 8
+  cross_class_hamming: 4
+  min_reviewed_per_class: 25
+
+egg_fish:
+  source: data/download/roboflow_yolo_deduped/20260612_181500
+  output: data/detection/egg_fish
+  shared_output: data/detection/egg_fish_shared
+  seed: 1412
+  phash_threshold: 4
+  image_size: 640
+  hard_negative_max_per_class: 80
+
+food_regions:
+  source: data/archive/raw_tray_datasets_20260610_174513
+  output: data/detection/food_regions
+  phash_threshold: 4
+  min_area_ratio: 0.005
+
+packages:
+  classification_zip: outputs/cloud/classification.zip
+  classification_manifest: outputs/cloud/classification.manifest.json
+  egg_fish_zip: outputs/cloud/egg_fish_shared_yolo.zip
+  egg_fish_manifest: outputs/cloud/egg_fish_shared_yolo.manifest.json
+  food_regions_zip: outputs/cloud/food_regions_yolo.zip
+  food_regions_manifest: outputs/cloud/food_regions_yolo.manifest.json

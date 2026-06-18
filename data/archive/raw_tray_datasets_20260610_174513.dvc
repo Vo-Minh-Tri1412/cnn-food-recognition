@@ -1,0 +1,6 @@
+outs:
+- md5: 753fccda353c7ae281861ece673af7ae.dir
+  size: 122699622
+  nfiles: 2200
+  hash: md5
+  path: raw_tray_datasets_20260610_174513

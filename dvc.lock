@@ -1,0 +1,286 @@
+schema: '2.0'
+stages:
+  build_classification:
+    cmd: python scripts/data/01_build_classification_dataset.py --old-source
+      data/archive/empty_old_source --reviewed-source data/reviewed --out
+      data/classification --train-ratio 0.8 --val-ratio 0.1 --test-ratio 0.1
+      --seed 42 --image-size 512 --mode pad --duplicate-hamming 8
+      --cross-class-hamming 4 --min-reviewed-per-class 25 --clear --clear-all
+      --report outputs/reports/weighted_classification_dataset_report.csv
+    deps:
+    - path: canteen_checkout/config.py
+      hash: md5
+      md5: f10de01bd1fc99425d75c1c4344d0009
+      size: 2520
+    - path: data/reviewed
+      hash: md5
+      md5: 6638a34150e12042cb07a59bde5efd98.dir
+      size: 165452361
+      nfiles: 2895
+    - path: scripts/data/01_build_classification_dataset.py
+      hash: md5
+      md5: ffa996f74137b329da8db63339d93c55
+      size: 18495
+    params:
+      params.yaml:
+        classification:
+          reviewed_source: data/reviewed
+          old_source: data/archive/empty_old_source
+          output: data/classification
+          seed: 42
+          train_ratio: 0.8
+          val_ratio: 0.1
+          test_ratio: 0.1
+          image_size: 512
+          resize_mode: pad
+          duplicate_hamming: 8
+          cross_class_hamming: 4
+          min_reviewed_per_class: 25
+    outs:
+    - path: data/classification
+      hash: md5
+      md5: e549053327e3d5c75fc3fd41a55d5bfc.dir
+      size: 165258840
+      nfiles: 2895
+    - path: outputs/reports/weighted_classification_dataset_report.csv
+      hash: md5
+      md5: fc5b8b04d5e4ac247f2a702606f0d00c
+      size: 663059
+    - path: outputs/reports/weighted_classification_dataset_report.summary.json
+      hash: md5
+      md5: 3038a642e5a8caf0d1dc3687875b5029
+      size: 4662
+  audit_classification:
+    cmd: python scripts/data/02_audit_dataset_conflicts.py --root
+      data/classification --phash-threshold 4 --out
+      outputs/reports/dataset_conflicts.csv --summary
+      outputs/reports/dataset_conflicts.summary.json
+    deps:
+    - path: data/classification
+      hash: md5
+      md5: e549053327e3d5c75fc3fd41a55d5bfc.dir
+      size: 165258840
+      nfiles: 2895
+    - path: scripts/data/02_audit_dataset_conflicts.py
+      hash: md5
+      md5: 1f24d591a945a0d9fbdbfad0fffa9676
+      size: 10038
+    params:
+      params.yaml:
+        classification.cross_class_hamming: 4
+    outs:
+    - path: outputs/reports/dataset_conflicts.csv
+      hash: md5
+      md5: fba5cf9a4b72f8420f9b3b7733472842
+      size: 154
+    - path: outputs/reports/dataset_conflicts.summary.json
+      hash: md5
+      md5: 3c6626fd4aa07ee1bb37f252307eed25
+      size: 622
+  package_classification:
+    cmd: python scripts/data/03_package_classification_dataset.py --source
+      data/classification --output outputs/cloud/classification.zip --manifest
+      outputs/cloud/classification.manifest.json
+    deps:
+    - path: data/classification
+      hash: md5
+      md5: e549053327e3d5c75fc3fd41a55d5bfc.dir
+      size: 165258840
+      nfiles: 2895
+    - path: scripts/data/03_package_classification_dataset.py
+      hash: md5
+      md5: 42f1a1a199011e13a579c616433985cf
+      size: 6590
+    params:
+      params.yaml:
+        packages.classification_manifest:
+          outputs/cloud/classification.manifest.json
+        packages.classification_zip: outputs/cloud/classification.zip
+    outs:
+    - path: outputs/cloud/classification.manifest.json
+      hash: md5
+      md5: 9164b40d65ec1dc3b2e2f9bfe60b40c7
+      size: 770422
+    - path: outputs/cloud/classification.zip
+      hash: md5
+      md5: 48e33a277e0998dbbfd38b41bb0e9aea
+      size: 163266607
+  build_egg_fish:
+    cmd: python scripts/data/04_build_yolo_dataset.py --source
+      data/download/roboflow_yolo_deduped/20260612_181500 --out
+      data/detection/egg_fish --phash-threshold 4 --clear
+    deps:
+    - path: canteen_checkout/config.py
+      hash: md5
+      md5: f10de01bd1fc99425d75c1c4344d0009
+      size: 2520
+    - path: data/download/roboflow_yolo_deduped/20260612_181500
+      hash: md5
+      md5: 3d3dad4c354b2605e8fa92e2b9c10424.dir
+      size: 24651052
+      nfiles: 1170
+    - path: scripts/data/04_build_yolo_dataset.py
+      hash: md5
+      md5: b68db6192c2c536f2bf1f27b5fc902e0
+      size: 10688
+    params:
+      params.yaml:
+        egg_fish.output: data/detection/egg_fish
+        egg_fish.phash_threshold: 4
+        egg_fish.source: data/download/roboflow_yolo_deduped/20260612_181500
+    outs:
+    - path: data/detection/egg_fish
+      hash: md5
+      md5: 11f350a54ef040e22d53c3a1373ec33b.dir
+      size: 17726934
+      nfiles: 793
+    - path: outputs/reports/egg_fish_dataset_report.csv
+      hash: md5
+      md5: 2b63b0e6fc3c5bbbb0e35baa899fae14
+      size: 216261
+    - path: outputs/reports/egg_fish_dataset_report.json
+      hash: md5
+      md5: f4593255cd8bbb1c0ecfcb86e4c2fea7
+      size: 796
+  add_egg_fish_negatives:
+    cmd: python scripts/data/05_build_yolo_shared_negatives.py --base
+      data/detection/egg_fish --reviewed data/reviewed --out
+      data/detection/egg_fish_shared --max-per-class 80 --seed 1412
+      --phash-threshold 4 --image-size 640 --clear
+    deps:
+    - path: data/detection/egg_fish
+      hash: md5
+      md5: 11f350a54ef040e22d53c3a1373ec33b.dir
+      size: 17726934
+      nfiles: 793
+    - path: data/reviewed
+      hash: md5
+      md5: 6638a34150e12042cb07a59bde5efd98.dir
+      size: 165452361
+      nfiles: 2895
+    - path: scripts/data/05_build_yolo_shared_negatives.py
+      hash: md5
+      md5: e1a09af4d328f997361a571a6d6fcc15
+      size: 12041
+    params:
+      params.yaml:
+        egg_fish.hard_negative_max_per_class: 80
+        egg_fish.image_size: 640
+        egg_fish.phash_threshold: 4
+        egg_fish.seed: 1412
+        egg_fish.shared_output: data/detection/egg_fish_shared
+    outs:
+    - path: data/detection/egg_fish_shared
+      hash: md5
+      md5: a24473f1f48dd5737bbfafeb5a654395.dir
+      size: 59660834
+      nfiles: 1913
+    - path: outputs/reports/egg_fish_shared_negatives_report.csv
+      hash: md5
+      md5: a481cc256886d25fd6896061eb531ad5
+      size: 228589
+    - path: outputs/reports/egg_fish_shared_negatives_report.json
+      hash: md5
+      md5: 33053e032c08af68d0e2e0a6d3815d0b
+      size: 1804
+  package_egg_fish:
+    cmd: python scripts/data/06_package_yolo_dataset.py --source
+      data/detection/egg_fish_shared --output
+      outputs/cloud/egg_fish_shared_yolo.zip --manifest
+      outputs/cloud/egg_fish_shared_yolo.manifest.json
+    deps:
+    - path: data/detection/egg_fish_shared
+      hash: md5
+      md5: a24473f1f48dd5737bbfafeb5a654395.dir
+      size: 59660834
+      nfiles: 1913
+    - path: scripts/data/06_package_yolo_dataset.py
+      hash: md5
+      md5: 5b5aafab9c34d6bb0e8157421cd8c287
+      size: 3112
+    params:
+      params.yaml:
+        packages.egg_fish_manifest:
+          outputs/cloud/egg_fish_shared_yolo.manifest.json
+        packages.egg_fish_zip: outputs/cloud/egg_fish_shared_yolo.zip
+    outs:
+    - path: outputs/cloud/egg_fish_shared_yolo.manifest.json
+      hash: md5
+      md5: 9ffaeed7e3acd4338f33f14cb708b8b9
+      size: 547
+    - path: outputs/cloud/egg_fish_shared_yolo.zip
+      hash: md5
+      md5: b879baa72e57ccc8e376617baacab81b
+      size: 58854707
+  build_food_regions:
+    cmd: python scripts/data/08_build_food_region_dataset.py --source-root
+      data/archive/raw_tray_datasets_20260610_174513 --out
+      data/detection/food_regions --min-area-ratio 0.005 --phash-threshold 4
+      --clear --report outputs/reports/food_region_dataset_report.csv
+    deps:
+    - path: canteen_checkout/config.py
+      hash: md5
+      md5: f10de01bd1fc99425d75c1c4344d0009
+      size: 2520
+    - path: canteen_checkout/food_region_data.py
+      hash: md5
+      md5: bfa3ddef81a1fa96b5dbf115254931de
+      size: 11060
+    - path: data/archive/raw_tray_datasets_20260610_174513
+      hash: md5
+      md5: 753fccda353c7ae281861ece673af7ae.dir
+      size: 122699622
+      nfiles: 2200
+    - path: scripts/data/08_build_food_region_dataset.py
+      hash: md5
+      md5: f9b221c5643ca6eaf5700f659db236b1
+      size: 8965
+    params:
+      params.yaml:
+        food_regions:
+          source: data/archive/raw_tray_datasets_20260610_174513
+          output: data/detection/food_regions
+          phash_threshold: 4
+          min_area_ratio: 0.005
+    outs:
+    - path: data/detection/food_regions
+      hash: md5
+      md5: 617614ed037e068e46967cba01556519.dir
+      size: 20980313
+      nfiles: 731
+    - path: outputs/reports/food_region_dataset_report.csv
+      hash: md5
+      md5: 46761d9037c1eaaeee0247cc41d93444
+      size: 418437
+    - path: outputs/reports/food_region_dataset_report.summary.json
+      hash: md5
+      md5: a8a4657fd1e9194b9ab67f68241ffdc8
+      size: 1805
+  package_food_regions:
+    cmd: python scripts/data/06_package_yolo_dataset.py --source
+      data/detection/food_regions --output outputs/cloud/food_regions_yolo.zip
+      --manifest outputs/cloud/food_regions_yolo.manifest.json
+    deps:
+    - path: data/detection/food_regions
+      hash: md5
+      md5: 617614ed037e068e46967cba01556519.dir
+      size: 20980313
+      nfiles: 731
+    - path: scripts/data/06_package_yolo_dataset.py
+      hash: md5
+      md5: 5b5aafab9c34d6bb0e8157421cd8c287
+      size: 3112
+    params:
+      params.yaml:
+        packages.food_regions_manifest:
+          outputs/cloud/food_regions_yolo.manifest.json
+        packages.food_regions_zip: outputs/cloud/food_regions_yolo.zip
+    outs:
+    - path: outputs/cloud/food_regions_yolo.manifest.json
+      hash: md5
+      md5: 1937c86149ed0e8d6f2655db89e0bd1f
+      size: 537
+    - path: outputs/cloud/food_regions_yolo.zip
+      hash: md5
+      md5: 9401792ac64937f02bca4bf769a0afd2
+      size: 21086622

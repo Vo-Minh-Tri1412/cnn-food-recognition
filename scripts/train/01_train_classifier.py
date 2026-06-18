@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -290,6 +291,7 @@ def main() -> None:
     best_val_acc = -1.0
     best_epoch = 0
     epochs_without_improvement = 0
+    early_stopped = False
     args.model_out.parent.mkdir(parents=True, exist_ok=True)
     for epoch in range(1, args.epochs + 1):
         train_loss, train_acc = run_epoch(model, train_loader, criterion, optimizer, device, train=True)
@@ -330,6 +332,7 @@ def main() -> None:
         else:
             epochs_without_improvement += 1
             if args.patience > 0 and epochs_without_improvement >= args.patience:
+                early_stopped = True
                 print(f"Early stopping at epoch {epoch}; best epoch was {best_epoch}.")
                 break
 
@@ -343,6 +346,14 @@ def main() -> None:
         print(f"Loaded best checkpoint for test: epoch={checkpoint.get('metadata', {}).get('epoch')}, val_acc={checkpoint.get('metadata', {}).get('best_val_acc')}")
     y_true, y_pred = collect_predictions(model, test_loader, device)
     report = classification_report(y_true, y_pred, labels=list(range(len(DISH_CLASSES))), target_names=DISH_CLASSES, zero_division=0)
+    report_dict = classification_report(
+        y_true,
+        y_pred,
+        labels=list(range(len(DISH_CLASSES))),
+        target_names=DISH_CLASSES,
+        zero_division=0,
+        output_dict=True,
+    )
     (REPORTS_DIR / "classification_report.txt").write_text(report, encoding="utf-8")
     cm = confusion_matrix(y_true, y_pred, labels=list(range(len(DISH_CLASSES))))
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=DISH_CLASSES)
@@ -351,6 +362,43 @@ def main() -> None:
     plt.tight_layout()
     plt.savefig(REPORTS_DIR / "confusion_matrix.png", dpi=160)
     plt.close(fig)
+    summary = {
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "data": str(args.data),
+        "model_out": str(args.model_out),
+        "architecture": args.arch,
+        "epochs_requested": args.epochs,
+        "epochs_completed": len(history),
+        "patience": args.patience,
+        "early_stopped": early_stopped,
+        "best_epoch": best_epoch,
+        "best_val_accuracy": best_val_acc,
+        "batch_size": args.batch_size,
+        "image_size": args.image_size,
+        "learning_rate": args.lr,
+        "augmentation": args.augmentation,
+        "class_augmentation": args.class_augmentation,
+        "sampler": args.sampler,
+        "oversample_class": args.oversample_class,
+        "loss": args.loss,
+        "weighted_loss": not args.no_weighted_loss,
+        "label_smoothing": args.label_smoothing,
+        "split_counts": {
+            "train": train_ds.counts_by_class(),
+            "val": val_ds.counts_by_class(),
+            "test": test_ds.counts_by_class(),
+        },
+        "test_metrics": {
+            "accuracy": report_dict["accuracy"],
+            "macro_f1": report_dict["macro avg"]["f1-score"],
+            "weighted_f1": report_dict["weighted avg"]["f1-score"],
+            "per_class": report_dict,
+        },
+    }
+    (REPORTS_DIR / "classifier_training_summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     print(report)
     print(f"Saved model: {args.model_out}")
 

@@ -57,6 +57,19 @@ class ColabNotebookTests(unittest.TestCase):
     def test_yolo_sections_use_runtime_weight_cache(self):
         self.assertEqual(self.code.count('"--weights-cache", YOLO_CACHE_ROOT'), 2)
 
+    def test_notebook_documents_dvc_before_drive_push(self):
+        commands = ["dvc.exe pull", "dvc.exe status", "dvc.exe repro", "dvc.exe push", "--push-inputs --apply"]
+        positions = [self.markdown.index(command) for command in commands]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_all_models_write_provenance_and_yolo_tests_write_metrics(self):
+        self.assertEqual(self.code.count("write_run_provenance("), 3)
+        self.assertEqual(self.code.count('/ "run_provenance.json"'), 3)
+        self.assertEqual(self.code.count('/ "test_metrics.json"'), 2)
+        self.assertIn('CLS_RUN_ROOT / "reports" / "run_provenance.json"', self.code)
+        self.assertIn('REGION_RUN_ROOT / "reports" / "test_metrics.json"', self.code)
+        self.assertIn('EGG_FISH_RUN_ROOT / "reports" / "test_metrics.json"', self.code)
+
     def test_classifier_uses_early_stopping(self):
         self.assertIn("CLS_PATIENCE = 3", self.code)
         self.assertIn('"--patience", CLS_PATIENCE', self.code)

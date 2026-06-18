@@ -48,6 +48,37 @@ models/*.pt                            trained model weights
 
 Legacy/raw/history data may still exist under `data/archive/`, `data/download/`, and `data/inbox/raw_batches/`, but do not train directly from those folders.
 
+## DVC Data Versioning
+
+DVC versions the three source snapshots and the reproducible build/package pipeline. Model weights and Colab run folders are intentionally not stored in DVC.
+
+```text
+data/reviewed
+data/archive/raw_tray_datasets_20260610_174513
+data/download/roboflow_yolo_deduped/20260612_181500
+```
+
+Install DVC in its own environment so the Google Drive plugin cannot change ML dependencies:
+
+```powershell
+py -3 -m venv .venv-dvc
+.\.venv-dvc\Scripts\python.exe -m pip install -r requirements-dvc.txt
+.\.venv-dvc\Scripts\dvc.exe pull
+.\.venv-dvc\Scripts\dvc.exe status
+.\.venv-dvc\Scripts\dvc.exe repro
+.\.venv-dvc\Scripts\dvc.exe push
+```
+
+The default remote is `gdrive://root/canteen_checkout/dvc-storage`. Before the first push, create a Google Cloud OAuth client of type **Desktop app**, enable Google Drive API, configure the consent screen, and add your Google account as a test user. Store its credentials locally:
+
+```powershell
+.\.venv-dvc\Scripts\dvc.exe remote modify --local gdrive gdrive_client_id "<YOUR_CLIENT_ID>"
+.\.venv-dvc\Scripts\dvc.exe remote modify --local gdrive gdrive_client_secret "<YOUR_CLIENT_SECRET>"
+.\.venv-dvc\Scripts\dvc.exe push
+```
+
+This avoids the blocked shared OAuth client bundled with `dvc-gdrive`. Secrets are written to `.dvc/config.local`, which is ignored by Git. Never put OAuth values or the generated user credential file in `.dvc/config`. `params.yaml` owns build parameters, while `dvc.lock` pins the exact dependency and output hashes. The project also keeps DVC's state database under `.dvc/tmp/site-cache` to avoid Windows permissions issues in `C:\ProgramData`.
+
 ## Active Scripts
 
 Scripts are grouped by purpose:
@@ -107,6 +138,8 @@ The demo stores customer points, vouchers, paid bills, and dish ratings in local
 `POST /api/checkout/confirm` is idempotent, so retrying the same payment confirmation cannot award points or consume a voucher twice. Guests may confirm and rate without a phone number, but they do not earn points or issue vouchers.
 
 Build classifier dataset:
+
+The canonical way to rebuild every dataset and package is `dvc repro`. The individual commands below remain useful for debugging one script.
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\data\01_build_classification_dataset.py `
@@ -231,6 +264,8 @@ Pull canonical models plus the newest run for each model back from Drive:
 ```
 
 Use `--push-models` only for an intentional recovery operation. Colab writes canonical weights to `Drive/models/` and run artifacts to `Drive/runs/<model>/<timestamp>/`; pulled reports are stored under `outputs/cloud/drive_runs/<model>/<timestamp>/`.
+
+Every new Colab run writes `reports/run_provenance.json`, linking the model to the Git commit, `dvc.lock`, dataset ZIP/manifest hashes, hyperparameters, model hash, and training duration. The classifier additionally writes `classifier_training_summary.json`; each YOLO test section writes `test_metrics.json`.
 
 ## Billing Classes
 
