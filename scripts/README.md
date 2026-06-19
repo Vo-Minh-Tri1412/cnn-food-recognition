@@ -25,7 +25,7 @@ The project now keeps only active scripts in purpose-specific folders.
 
 ## train
 
-- `01_train_classifier.py`: train the 11-class dish classifier; supports focal loss, targeted oversampling, and per-class augmentation overrides.
+- `01_train_classifier.py`: train the 11-class dish classifier; supports focal loss, targeted oversampling, per-class augmentation overrides, and validation-accuracy early stopping.
 - `02_train_yolo_detector.py`: train the auxiliary YOLO egg/fish detector; `--weights-cache` keeps downloaded YOLO and AMP-check weights outside the repository root.
 - `03_train_food_region_detector.py`: train the automatic tray food-region detector used before dish classification; supports the same isolated weight cache.
 

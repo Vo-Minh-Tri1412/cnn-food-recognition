@@ -56,6 +56,10 @@ class ColabNotebookTests(unittest.TestCase):
     def test_yolo_sections_use_runtime_weight_cache(self):
         self.assertEqual(self.code.count('"--weights-cache", YOLO_CACHE_ROOT'), 2)
 
+    def test_classifier_uses_early_stopping(self):
+        self.assertIn("CLS_PATIENCE = 3", self.code)
+        self.assertIn('"--patience", CLS_PATIENCE', self.code)
+
 
 if __name__ == "__main__":
     unittest.main()

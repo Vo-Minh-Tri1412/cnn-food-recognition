@@ -149,6 +149,7 @@ Train classifier:
   --data data\classification `
   --arch efficientnet_b2 `
   --epochs 8 `
+  --patience 3 `
   --batch-size 16 `
   --image-size 260 `
   --augmentation light `
@@ -157,7 +158,7 @@ Train classifier:
   --label-smoothing 0.05
 ```
 
-For an experiment after this baseline, add `--loss focal --focal-gamma 2.0`. Do not combine very aggressive oversampling and focal loss unless the confusion matrix still shows poor `canh_chua_khong_ca` recall.
+The classifier stops when validation accuracy has not improved for three consecutive epochs and keeps the best checkpoint. Use `--patience 0` only when intentionally disabling early stopping. For an experiment after this baseline, add `--loss focal --focal-gamma 2.0`. Do not combine very aggressive oversampling and focal loss unless the confusion matrix still shows poor `canh_chua_khong_ca` recall.
 
 Train YOLO detector:
 

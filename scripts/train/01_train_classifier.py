@@ -209,6 +209,7 @@ def main() -> None:
     parser.add_argument("--data", type=Path, default=CLASSIFICATION_DIR)
     parser.add_argument("--model-out", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--patience", type=int, default=3, help="Stop after this many epochs without better validation accuracy; use 0 to disable.")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -287,6 +288,8 @@ def main() -> None:
 
     history = []
     best_val_acc = -1.0
+    best_epoch = 0
+    epochs_without_improvement = 0
     args.model_out.parent.mkdir(parents=True, exist_ok=True)
     for epoch in range(1, args.epochs + 1):
         train_loss, train_acc = run_epoch(model, train_loader, criterion, optimizer, device, train=True)
@@ -300,8 +303,10 @@ def main() -> None:
         }
         history.append(row)
         print(json.dumps(row, indent=2))
-        if val_acc >= best_val_acc:
+        if val_acc > best_val_acc:
             best_val_acc = val_acc
+            best_epoch = epoch
+            epochs_without_improvement = 0
             save_checkpoint(
                 args.model_out,
                 model,
@@ -322,6 +327,11 @@ def main() -> None:
                 },
                 arch=args.arch,
             )
+        else:
+            epochs_without_improvement += 1
+            if args.patience > 0 and epochs_without_improvement >= args.patience:
+                print(f"Early stopping at epoch {epoch}; best epoch was {best_epoch}.")
+                break
 
     save_class_names()
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
