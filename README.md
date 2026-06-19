@@ -9,7 +9,7 @@ The main workflow is now intentionally small:
 3. Build/train the one-class YOLO `food_region` detector for automatic tray crops.
 4. Train the dish classifier.
 5. Build/train the auxiliary YOLO egg/fish detector.
-6. Demo tray checkout with editable auto regions, safe grid fallback, detector fusion, prices, loyalty, vouchers, ratings, and bill JSON.
+6. Demo tray checkout with AI-detected or fixed-grid regions, safe grid fallback, detector fusion, prices, loyalty, vouchers, ratings, and bill JSON.
 
 ## Main Notebook
 
@@ -92,7 +92,7 @@ Start Demo App:
 .\.venv\Scripts\python.exe scripts\apps\01_demo_checkout_app.py --host 127.0.0.1 --port 7863
 ```
 
-The demo requests automatic food regions when `models/food_region_detector.pt` exists. Every box remains editable. Missing, empty, or implausible detector output falls back to the five-compartment grid.
+The demo exposes exactly two automatic region modes: **AI Detect** uses `models/food_region_detector.pt`, while **Fixed Grid** uses the hard-coded five-compartment coordinates. Missing, empty, or implausible AI output falls back safely to the same fixed grid; the browser demo no longer supports manual box editing.
 
 ### Local loyalty and ratings
 

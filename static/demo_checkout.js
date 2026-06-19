@@ -7,8 +7,7 @@ const state = {
   imageWidth: 0,
   imageHeight: 0,
   regions: [],
-  selected: -1,
-  drag: null,
+  regionMode: "auto",
   zoom: 1,
   total: 0,
   regionMeta: {},
@@ -66,7 +65,6 @@ function optionHtml(items, valueKey = "path", labelKey = "name") {
 async function init() {
   state.app = await api("/api/state");
   $("imageSelect").innerHTML = optionHtml(state.app.images);
-  $("templateSelect").innerHTML = optionHtml(state.app.templates);
   $("rewardSelect").innerHTML = (state.app.reward_catalog || []).map((reward) => (
     `<option value="${esc(reward.class_name)}">${esc(reward.display_name)} · ${reward.points_cost} điểm</option>`
   )).join("");
@@ -76,7 +74,9 @@ async function init() {
     const classifierReady = state.app.default_model_path ? "Classifier ready" : "Classifier missing";
     const detectorReady = state.app.default_detector_path ? "Detector ready" : "Detector missing";
     const regionReady = state.app.default_region_detector_path ? "Region AI ready" : "Region AI missing";
-    badge.textContent = `${classifierReady} · ${regionReady} · ${detectorReady}`;
+    const readyCount = [classifierReady, detectorReady, regionReady].filter((status) => status.endsWith("ready")).length;
+    badge.textContent = `${readyCount}/3 models ready`;
+    badge.title = `${classifierReady} · ${regionReady} · ${detectorReady}`;
   }
 
   if (state.app.images.length) {
@@ -164,7 +164,7 @@ async function loadImage(path) {
   if (titleEl) titleEl.textContent = path.split(/[\\/]/).pop();
   state.zoom = 1;
   $("zoomInput").value = "1";
-  await applyAutoRegions();
+  await applyRegionsForMode();
 }
 
 function fitWidth() {
@@ -203,24 +203,12 @@ function positionOverlay() {
   overlay.setAttribute("viewBox", `0 0 ${state.imageWidth} ${state.imageHeight}`);
 }
 
-function snap(value) {
-  return Math.round(value / 4) * 4;
-}
-
 function clampRegion(region) {
   const minSize = 24;
   region.x = Math.max(0, Math.min(state.imageWidth - minSize, Math.round(region.x)));
   region.y = Math.max(0, Math.min(state.imageHeight - minSize, Math.round(region.y)));
   region.w = Math.max(minSize, Math.min(state.imageWidth - region.x, Math.round(region.w)));
   region.h = Math.max(minSize, Math.min(state.imageHeight - region.y, Math.round(region.h)));
-}
-
-function pointInImage(event) {
-  const point = $("overlay").createSVGPoint();
-  point.x = event.clientX;
-  point.y = event.clientY;
-  const transformed = point.matrixTransform($("overlay").getScreenCTM().inverse());
-  return { x: Math.round(transformed.x), y: Math.round(transformed.y) };
 }
 
 function svgEl(name, attrs = {}) {
@@ -231,43 +219,17 @@ function svgEl(name, attrs = {}) {
   return node;
 }
 
-function handleSize() {
-  const overlay = $("overlay");
-  if (!overlay || !state.imageWidth) return 16;
-  const displayWidth = overlay.clientWidth || state.imageWidth;
-  const scale = state.imageWidth / displayWidth;
-  return Math.round(18 * scale); // 18px visual size on screen
-}
-
-function addHandle(group, region, index, mode, x, y, size) {
-  const handle = svgEl("rect", {
-    class: "handle",
-    "data-i": index,
-    "data-mode": mode,
-    x,
-    y,
-    width: size,
-    height: size,
-    rx: 9,
-  });
-  group.appendChild(handle);
-}
-
-function draw(syncRows = true) {
+function draw() {
   applyZoom();
   const overlay = $("overlay");
   overlay.replaceChildren();
 
   state.regions.forEach((region, index) => {
     clampRegion(region);
-    const group = svgEl("g", { "data-i": index });
-    const selected = index === state.selected;
+    const group = svgEl("g");
     const ignored = region.label === "ignore";
-    const size = selected ? handleSize() : 0;
     const rect = svgEl("rect", {
-      class: `region-rect${selected ? " selected" : ""}${ignored ? " ignored" : ""}`,
-      "data-i": index,
-      "data-mode": "move",
+      class: `region-rect${ignored ? " ignored" : ""}`,
       x: region.x,
       y: region.y,
       width: region.w,
@@ -275,71 +237,29 @@ function draw(syncRows = true) {
       rx: 12,
     });
     group.appendChild(rect);
-
-    // Removing region label rendering (top_left, bottom_right, etc.)
-    // as requested by the user.
-
-    if (selected) {
-      addHandle(group, region, index, "nw", region.x - size / 2, region.y - size / 2, size);
-      addHandle(group, region, index, "ne", region.x + region.w - size / 2, region.y - size / 2, size);
-      addHandle(group, region, index, "sw", region.x - size / 2, region.y + region.h - size / 2, size);
-      addHandle(group, region, index, "se", region.x + region.w - size / 2, region.y + region.h - size / 2, size);
-    }
     overlay.appendChild(group);
   });
-
-  $("regionCount").textContent = `${state.regions.length} crops`;
-  if (syncRows) renderRows();
 }
 
-function labelOptions(selected) {
-  return state.app.labels.map((label) => {
-    const display = label || "model";
-    return `<option value="${esc(label)}" ${label === selected ? "selected" : ""}>${esc(display)}</option>`;
-  }).join("");
+function renderRegionMode() {
+  const auto = state.regionMode === "auto";
+  $("autoRegionBtn").classList.toggle("active", auto);
+  $("fixedRegionBtn").classList.toggle("active", !auto);
+  $("autoRegionBtn").setAttribute("aria-pressed", String(auto));
+  $("fixedRegionBtn").setAttribute("aria-pressed", String(!auto));
 }
 
-function renderRows() {
-  $("regionRows").innerHTML = state.regions.map((region, index) => `
-    <tr data-index="${index}" class="${index === state.selected ? "active" : ""}">
-      <td><input data-key="name" value="${esc(region.name || "")}"></td>
-      <td><select data-key="label">${labelOptions(region.label || "")}</select></td>
-      <td><input data-key="x" type="number" value="${region.x}"></td>
-      <td><input data-key="y" type="number" value="${region.y}"></td>
-      <td><input data-key="w" type="number" value="${region.w}"></td>
-      <td><input data-key="h" type="number" value="${region.h}"></td>
-    </tr>
-  `).join("");
-
-  $("regionRows").querySelectorAll("tr").forEach((row) => {
-    const index = Number(row.dataset.index);
-    row.addEventListener("click", () => {
-      state.selected = index;
-      draw();
-    });
-    row.querySelectorAll("input,select").forEach((input) => {
-      input.addEventListener("input", () => {
-        const key = input.dataset.key;
-        state.regions[index][key] = ["x", "y", "w", "h"].includes(key) ? Number(input.value || 0) : input.value;
-        clampRegion(state.regions[index]);
-        draw(false);
-      });
-    });
-  });
-}
-
-async function applyTemplate() {
+async function applyFixedRegions() {
   if (!state.imagePath) return;
   const data = await api("/api/regions", {
     image_path: state.imagePath,
     mode: "template",
-    template: $("templateSelect").value,
+    template: "",
   });
   state.regions = data.regions;
   state.regionMeta = data;
-  state.selected = state.regions.length ? 0 : -1;
   draw();
-  setStatus("Grid regions ready");
+  setStatus(`Fixed grid ready · ${state.regions.length} regions`);
 }
 
 async function applyAutoRegions() {
@@ -349,11 +269,10 @@ async function applyAutoRegions() {
     image_path: state.imagePath,
     mode: "auto",
     region_threshold: 0.35,
-    template: $("templateSelect").value,
+    template: "",
   });
   state.regions = data.regions;
   state.regionMeta = data;
-  state.selected = state.regions.length ? 0 : -1;
   draw();
   if (data.region_source === "auto_detector") {
     setStatus(`AI found ${state.regions.length} food regions`);
@@ -362,104 +281,17 @@ async function applyAutoRegions() {
   }
 }
 
-function addRegion() {
-  if (!state.imageWidth) return;
-  const width = Math.round(state.imageWidth * 0.23);
-  const height = Math.round(state.imageHeight * 0.18);
-  state.regions.push({
-    name: `crop_${state.regions.length + 1}`,
-    x: Math.round((state.imageWidth - width) / 2),
-    y: Math.round((state.imageHeight - height) / 2),
-    w: width,
-    h: height,
-    label: "",
-  });
-  state.selected = state.regions.length - 1;
-  draw();
+async function applyRegionsForMode() {
+  renderRegionMode();
+  if (state.regionMode === "fixed") await applyFixedRegions();
+  else await applyAutoRegions();
 }
 
-function duplicateRegion() {
-  if (state.selected < 0) return;
-  const copy = { ...state.regions[state.selected] };
-  copy.name = `${copy.name || "crop"}_copy`;
-  copy.x += 28;
-  copy.y += 28;
-  clampRegion(copy);
-  state.regions.push(copy);
-  state.selected = state.regions.length - 1;
-  draw();
+async function setRegionMode(mode) {
+  state.regionMode = mode;
+  clearBill();
+  await applyRegionsForMode();
 }
-
-function deleteRegion() {
-  if (state.selected < 0) return;
-  state.regions.splice(state.selected, 1);
-  state.selected = Math.min(state.selected, state.regions.length - 1);
-  draw();
-}
-
-function toggleIgnore() {
-  if (state.selected < 0) return;
-  const region = state.regions[state.selected];
-  region.label = region.label === "ignore" ? "" : "ignore";
-  draw();
-}
-
-function resizeRegion(region, start, mode, dx, dy) {
-  if (mode === "move") {
-    region.x = snap(start.x + dx);
-    region.y = snap(start.y + dy);
-    return;
-  }
-  let x = start.x;
-  let y = start.y;
-  let w = start.w;
-  let h = start.h;
-  if (mode.includes("e")) w = start.w + dx;
-  if (mode.includes("s")) h = start.h + dy;
-  if (mode.includes("w")) {
-    x = start.x + dx;
-    w = start.w - dx;
-  }
-  if (mode.includes("n")) {
-    y = start.y + dy;
-    h = start.h - dy;
-  }
-  region.x = snap(x);
-  region.y = snap(y);
-  region.w = snap(w);
-  region.h = snap(h);
-}
-
-$("overlay").addEventListener("pointerdown", (event) => {
-  const target = event.target.closest("[data-i]");
-  if (!target) return;
-  const index = Number(target.dataset.i);
-  state.selected = index;
-  state.drag = {
-    index,
-    mode: target.dataset.mode || "move",
-    point: pointInImage(event),
-    region: { ...state.regions[index] },
-  };
-  $("overlay").setPointerCapture(event.pointerId);
-  draw();
-  event.preventDefault();
-});
-
-$("overlay").addEventListener("pointermove", (event) => {
-  if (!state.drag) return;
-  const point = pointInImage(event);
-  const drag = state.drag;
-  const region = state.regions[drag.index];
-  resizeRegion(region, drag.region, drag.mode, point.x - drag.point.x, point.y - drag.point.y);
-  clampRegion(region);
-  draw(false);
-});
-
-$("overlay").addEventListener("pointerup", () => {
-  state.drag = null;
-  renderRows();
-});
 
 function animateTotal(toValue) {
   const fromValue = state.total || 0;
@@ -711,10 +543,6 @@ function renderBill(bill) {
     `;
   }).join("");
   wireRatingControls();
-  $("cropStrip").innerHTML = bill.items.map((item) => (
-    `<img src="${esc(item.crop_url)}" title="${esc(item.class_name)}" alt="${esc(item.class_name)} crop">`
-  )).join("");
-
   renderNutrition(bill.items);
   renderQR(bill);
   renderRewardPanel();
@@ -729,7 +557,7 @@ async function runCheckout() {
     const bill = await api("/api/run", {
       image_path: state.imagePath,
       regions: state.regions,
-      region_mode: state.regionMeta.requested_mode || "manual",
+      region_mode: state.regionMeta.requested_mode || state.regionMode,
       region_metadata: state.regionMeta,
       region_threshold: 0.35,
       threshold: thresholdInput ? Number(thresholdInput.value || 0.55) : 0.55,
@@ -787,40 +615,20 @@ function clearBill() {
   $("billList").textContent = "No items yet";
   const jsonEl = $("billJson");
   if (jsonEl) jsonEl.textContent = "{}";
-  $("cropStrip").replaceChildren();
   const nutr = $("nutritionAdvice");
   if (nutr) { nutr.innerHTML = ""; nutr.style.display = "none"; }
   const qrSec = $("qrSection");
   if (qrSec) qrSec.style.display = "none";
 }
 
-function nudgeSelected(event) {
-  if (state.selected < 0 || ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName)) return;
-  const region = state.regions[state.selected];
-  const step = event.shiftKey ? 16 : 4;
-  if (event.key === "ArrowLeft") region.x -= step;
-  else if (event.key === "ArrowRight") region.x += step;
-  else if (event.key === "ArrowUp") region.y -= step;
-  else if (event.key === "ArrowDown") region.y += step;
-  else if (event.key === "Delete") deleteRegion();
-  else return;
-  event.preventDefault();
-  clampRegion(region);
-  draw();
-}
-
 $("loadImageBtn").addEventListener("click", () => loadImage($("imageSelect").value).catch(showError));
 $("imageSelect").addEventListener("change", () => loadImage($("imageSelect").value).catch(showError));
-$("applyTemplateBtn").addEventListener("click", () => applyTemplate().catch(showError));
-$("autoRegionBtn").addEventListener("click", () => applyAutoRegions().catch(showError));
-$("addRegionBtn").addEventListener("click", addRegion);
-$("duplicateRegionBtn").addEventListener("click", duplicateRegion);
-$("deleteRegionBtn").addEventListener("click", deleteRegion);
-$("ignoreRegionBtn").addEventListener("click", toggleIgnore);
+$("autoRegionBtn").addEventListener("click", () => setRegionMode("auto").catch(showError));
+$("fixedRegionBtn").addEventListener("click", () => setRegionMode("fixed").catch(showError));
 $("fitBtn").addEventListener("click", () => {
   state.zoom = 1;
   $("zoomInput").value = "1";
-  draw(false);
+  draw();
 });
 $("clearBillBtn").addEventListener("click", clearBill);
 $("runBtn").addEventListener("click", () => runCheckout().catch(showError));
@@ -839,11 +647,10 @@ $("phoneInput").addEventListener("keydown", (event) => {
 });
 $("zoomInput").addEventListener("input", (event) => {
   state.zoom = Number(event.target.value);
-  draw(false);
+  draw();
 });
 $("viewport").addEventListener("scroll", positionOverlay);
-window.addEventListener("resize", () => draw(false));
-document.addEventListener("keydown", nudgeSelected);
+window.addEventListener("resize", draw);
 
 $("uploadInput").addEventListener("change", (event) => {
   const file = event.target.files[0];
