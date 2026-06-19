@@ -4,7 +4,7 @@ The project now keeps only active scripts in purpose-specific folders.
 
 ## apps
 
-- `01_demo_checkout_app.py`: browser demo app for tray checkout.
+- `01_demo_checkout_app.py`: browser demo app for tray checkout, local SQLite loyalty/vouchers, payment confirmation, and per-item ratings.
 - `02_data_ide.py`: local Data IDE for reviewing and moving images.
 
 ## cli

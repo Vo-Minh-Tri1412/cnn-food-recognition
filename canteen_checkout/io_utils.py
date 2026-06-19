@@ -36,6 +36,7 @@ class PriceRow:
     class_name: str
     display_name: str
     price_vnd: int
+    reward_points: int
     note: str = ""
 
 
@@ -81,10 +82,12 @@ def load_prices(path: Path = PRICES_CSV) -> dict[str, PriceRow]:
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            price_vnd = int(row["price_vnd"])
             rows[row["class_name"]] = PriceRow(
                 class_name=row["class_name"],
                 display_name=row["display_name"],
-                price_vnd=int(row["price_vnd"]),
+                price_vnd=price_vnd,
+                reward_points=int(row.get("reward_points") or max(1, (price_vnd + 999) // 1000)),
                 note=row.get("note", ""),
             )
     return rows

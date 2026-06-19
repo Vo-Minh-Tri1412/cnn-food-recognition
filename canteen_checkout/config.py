@@ -37,6 +37,8 @@ OUTPUTS_DIR = _env_path("CANTEEN_OUTPUTS_DIR", PROJECT_ROOT / "outputs")
 CROPPED_DISHES_DIR = OUTPUTS_DIR / "cropped_dishes"
 BILLS_DIR = OUTPUTS_DIR / "bills"
 REPORTS_DIR = OUTPUTS_DIR / "reports"
+ENGAGEMENT_DB_PATH = _env_path("CANTEEN_ENGAGEMENT_DB_PATH", OUTPUTS_DIR / "canteen_engagement.sqlite3")
+PHONE_HMAC_KEY_PATH = _env_path("CANTEEN_PHONE_HMAC_KEY_PATH", OUTPUTS_DIR / "private" / "phone_hmac.key")
 
 PRICES_CSV = PROJECT_ROOT / "prices.csv"
 CLASS_NAMES_JSON = MODELS_DIR / "class_names.json"

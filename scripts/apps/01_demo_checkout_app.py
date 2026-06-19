@@ -29,11 +29,14 @@ from canteen_checkout.config import (
     DEFAULT_REGION_DETECTOR_PATH,
     DEMO_TRAYS_DIR,
     DISH_CLASSES,
+    ENGAGEMENT_DB_PATH,
     IMAGE_EXTENSIONS,
+    PHONE_HMAC_KEY_PATH,
     PROJECT_ROOT,
 )
 from canteen_checkout.cropping import CropRegion, crop_regions, five_compartment_template, load_regions
 from canteen_checkout.detector import detect_objects, empty_evidence, fuse_decision, load_yolo_detector
+from canteen_checkout.engagement import EngagementError, EngagementStore
 from canteen_checkout.io_utils import load_prices
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 from canteen_checkout.pricing import THIT_KHO_TRUNG_CLASS, dish_price
@@ -49,6 +52,32 @@ IGNORE_LABELS = {"ignore", "ignored", "unknown", "other", "extra"}
 MODEL_CACHE: dict[str, object] = {}
 DETECTOR_CACHE: dict[str, object] = {}
 REGION_DETECTOR_CACHE: dict[str, object] = {}
+ENGAGEMENT_STORE: EngagementStore | None = None
+
+
+def get_engagement_store() -> EngagementStore:
+    global ENGAGEMENT_STORE
+    if ENGAGEMENT_STORE is None:
+        ENGAGEMENT_STORE = EngagementStore(ENGAGEMENT_DB_PATH, phone_key_path=PHONE_HMAC_KEY_PATH)
+    return ENGAGEMENT_STORE
+
+
+def reward_catalog() -> list[dict[str, object]]:
+    return [
+        {
+            "class_name": row.class_name,
+            "display_name": row.display_name,
+            "points_cost": row.reward_points,
+            "discount_vnd": row.price_vnd,
+        }
+        for row in load_prices().values()
+    ]
+
+
+def write_bill_snapshot(bill: dict) -> None:
+    path = resolve_project_path(str(bill["bill_path"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(bill, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 @torch.no_grad()
@@ -260,7 +289,8 @@ def run_checkout(payload: dict) -> dict:
     threshold = float(payload.get("threshold", 0.55))
     regions, region_metadata = regions_from_payload(payload, image_path)
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
+    bill_id = uuid.uuid4().hex
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + bill_id[:6]
     out_dir = CROPPED_DISHES_DIR / f"{image_path.stem}_{run_id}"
     crop_paths = crop_regions(image_path, regions, out_dir)
     prices = load_prices()
@@ -353,6 +383,8 @@ def run_checkout(payload: dict) -> dict:
             }
         )
 
+    BILLS_DIR.mkdir(parents=True, exist_ok=True)
+    bill_path = BILLS_DIR / f"{image_path.stem}_{run_id}_bill.json"
     bill = {
         "image_path": relative_or_absolute(image_path),
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -369,13 +401,40 @@ def run_checkout(payload: dict) -> dict:
         "region_fallback_reason": str(region_metadata.get("fallback_reason") or ""),
         "items": items,
         "total_vnd": total,
+        "bill_path": relative_or_absolute(bill_path),
+        "model_loaded": model_loaded,
     }
-    BILLS_DIR.mkdir(parents=True, exist_ok=True)
-    bill_path = BILLS_DIR / f"{image_path.stem}_{run_id}_bill.json"
-    bill_path.write_text(json.dumps(bill, indent=2, ensure_ascii=False), encoding="utf-8")
-    bill["bill_path"] = relative_or_absolute(bill_path)
-    bill["model_loaded"] = model_loaded
+    bill = get_engagement_store().create_draft(
+        bill_id=bill_id,
+        bill_path=relative_or_absolute(bill_path),
+        payload=bill,
+        customer_id=str(payload.get("customer_id") or "") or None,
+        voucher_id=str(payload.get("voucher_id") or "") or None,
+    )
+    write_bill_snapshot(bill)
     return bill
+
+
+def confirm_checkout(payload: dict) -> dict:
+    bill = get_engagement_store().confirm_bill(str(payload.get("bill_id") or ""))
+    write_bill_snapshot(bill)
+    return bill
+
+
+def issue_voucher(payload: dict) -> dict:
+    prices = load_prices()
+    class_name = str(payload.get("class_name") or "")
+    reward = prices.get(class_name)
+    if reward is None:
+        raise EngagementError("Món đổi thưởng không hợp lệ.", code="reward_not_found", status=404)
+    return get_engagement_store().issue_voucher(
+        customer_id=str(payload.get("customer_id") or ""),
+        source_bill_id=str(payload.get("source_bill_id") or ""),
+        class_name=reward.class_name,
+        display_name=reward.display_name,
+        points_cost=reward.reward_points,
+        discount_vnd=reward.price_vnd,
+    )
 
 
 def save_upload(payload: dict) -> dict:
@@ -396,6 +455,7 @@ def save_upload(payload: dict) -> dict:
 
 def app_state() -> dict:
     prices = load_prices()
+    store = get_engagement_store()
     return {
         "project_root": str(PROJECT_ROOT),
         "images": list_demo_images(),
@@ -403,9 +463,15 @@ def app_state() -> dict:
         "classes": DISH_CLASSES,
         "labels": ["", "ignore", *DISH_CLASSES],
         "prices": {
-            key: {"display_name": value.display_name, "price_vnd": value.price_vnd}
+            key: {
+                "display_name": value.display_name,
+                "price_vnd": value.price_vnd,
+                "reward_points": value.reward_points,
+            }
             for key, value in prices.items()
         },
+        "reward_catalog": reward_catalog(),
+        "rating_summaries": store.rating_summaries(),
         "default_model_path": relative_or_absolute(DEFAULT_MODEL_PATH),
         "default_detector_path": relative_or_absolute(DEFAULT_DETECTOR_PATH) if DEFAULT_DETECTOR_PATH.exists() else "",
         "default_region_detector_path": relative_or_absolute(DEFAULT_REGION_DETECTOR_PATH) if DEFAULT_REGION_DETECTOR_PATH.exists() else "",
@@ -475,6 +541,9 @@ class DemoHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/state":
                 self.send_json(app_state())
                 return
+            if parsed.path == "/api/ratings/summary":
+                self.send_json({"ok": True, "summaries": get_engagement_store().rating_summaries()})
+                return
             if parsed.path == "/api/image-info":
                 path = resolve_project_path(parse_qs(parsed.query).get("path", [""])[0])
                 width, height = image_size(path)
@@ -504,6 +573,14 @@ class DemoHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/upload":
                 self.send_json({"ok": True, **save_upload(payload)})
                 return
+            if parsed.path == "/api/customers/lookup":
+                customer = get_engagement_store().lookup_customer(str(payload.get("phone") or ""))
+                self.send_json({"ok": True, "found": customer is not None, "customer": customer})
+                return
+            if parsed.path == "/api/customers":
+                customer, created = get_engagement_store().create_customer(str(payload.get("phone") or ""))
+                self.send_json({"ok": True, "created": created, "customer": customer})
+                return
             if parsed.path == "/api/regions":
                 image_path = resolve_project_path(str(payload["image_path"]))
                 regions, metadata = regions_from_payload(payload, image_path)
@@ -518,7 +595,27 @@ class DemoHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/run":
                 self.send_json({"ok": True, **run_checkout(payload)})
                 return
+            if parsed.path == "/api/checkout/confirm":
+                self.send_json({"ok": True, **confirm_checkout(payload)})
+                return
+            if parsed.path == "/api/vouchers":
+                self.send_json({"ok": True, **issue_voucher(payload)})
+                return
+            if parsed.path == "/api/ratings":
+                result = get_engagement_store().save_rating(
+                    bill_item_id=str(payload.get("bill_item_id") or ""),
+                    stars=payload.get("stars"),
+                    comment=str(payload.get("comment") or ""),
+                    customer_id=str(payload.get("customer_id") or "") or None,
+                )
+                self.send_json({"ok": True, **result})
+                return
             self.send_error(HTTPStatus.NOT_FOUND)
+        except EngagementError as exc:
+            self.send_json(
+                {"ok": False, "error": str(exc), "code": exc.code},
+                HTTPStatus(exc.status),
+            )
         except Exception as exc:
             self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 

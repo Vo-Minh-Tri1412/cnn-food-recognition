@@ -9,7 +9,7 @@ The main workflow is now intentionally small:
 3. Build/train the one-class YOLO `food_region` detector for automatic tray crops.
 4. Train the dish classifier.
 5. Build/train the auxiliary YOLO egg/fish detector.
-6. Demo tray checkout with editable auto regions, safe grid fallback, detector fusion, prices, and bill JSON.
+6. Demo tray checkout with AI-detected or fixed-grid regions, safe grid fallback, detector fusion, prices, loyalty, vouchers, ratings, and bill JSON.
 
 ## Main Notebook
 
@@ -92,7 +92,19 @@ Start Demo App:
 .\.venv\Scripts\python.exe scripts\apps\01_demo_checkout_app.py --host 127.0.0.1 --port 7863
 ```
 
-The demo requests automatic food regions when `models/food_region_detector.pt` exists. Every box remains editable. Missing, empty, or implausible detector output falls back to the five-compartment grid.
+The demo exposes exactly two automatic region modes: **AI Detect** uses `models/food_region_detector.pt`, while **Fixed Grid** uses the hard-coded five-compartment coordinates. Missing, empty, or implausible AI output falls back safely to the same fixed grid; the browser demo no longer supports manual box editing.
+
+### Local loyalty and ratings
+
+The demo stores customer points, vouchers, paid bills, and dish ratings in local SQLite at `outputs/canteen_engagement.sqlite3`. The database uses WAL mode and is created automatically. It is intentionally git-ignored and is not uploaded by the training workflow.
+
+- Vietnamese phone numbers are normalized, HMAC-hashed, and never stored in plaintext; only the final four digits are kept for display.
+- The HMAC key is read from `CANTEEN_PHONE_HMAC_KEY` or generated at `outputs/private/phone_hmac.key`.
+- A paid bill earns one point for every 10,000 VND actually charged. Predicting a tray never earns points.
+- A member may issue one single-use dish voucher after a paid bill. Points are deducted immediately, and the voucher applies to a later matching dish's base price only.
+- Ratings are available only after payment. Each bill item accepts one 1-5 star rating and an optional comment of at most 500 characters; public summaries expose only average stars and rating count.
+
+`POST /api/checkout/confirm` is idempotent, so retrying the same payment confirmation cannot award points or consume a voucher twice. Guests may confirm and rate without a phone number, but they do not earn points or issue vouchers.
 
 Build classifier dataset:
 
