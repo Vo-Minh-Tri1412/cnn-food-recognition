@@ -43,6 +43,7 @@ class ColabNotebookTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertNotIn("Kaggle", self.markdown)
         self.assertNotIn("files.upload", self.code)
+        self.assertIn('BRANCH = "main"', self.code)
 
     def test_each_model_writes_to_its_own_drive_run(self):
         self.assertIn('tao_run("classifier")', self.code)
