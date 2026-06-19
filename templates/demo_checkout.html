@@ -98,11 +98,45 @@
 
       <!-- ═══ RIGHT: Bill results ═══ -->
       <aside class="bill-rail">
+        <section class="customer-panel">
+          <div class="panel-title">Thành viên</div>
+          <div class="customer-entry">
+            <input id="phoneInput" type="tel" inputmode="tel" autocomplete="tel" maxlength="18" placeholder="Số điện thoại">
+            <button id="lookupCustomerBtn" class="btn btn-secondary compact-btn" type="button">Tra cứu</button>
+            <button id="createCustomerBtn" class="btn btn-primary compact-btn hidden" type="button">Tạo mới</button>
+          </div>
+          <div id="customerMessage" class="inline-message">Chưa chọn thành viên</div>
+          <div id="memberSummary" class="member-summary hidden">
+            <div class="member-identity">
+              <strong id="memberPhone"></strong>
+              <span id="memberPoints" class="points-chip">0 điểm</span>
+              <button id="clearCustomerBtn" class="clear-member" type="button" title="Bỏ chọn thành viên" aria-label="Bỏ chọn thành viên">×</button>
+            </div>
+            <label class="field-label" for="voucherSelect">Voucher cho bill này</label>
+            <select id="voucherSelect" class="wide-select">
+              <option value="">Không dùng voucher</option>
+            </select>
+          </div>
+        </section>
+
         <section class="bill-total">
           <div class="panel-title">Bill</div>
           <span class="total-label">Total</span>
           <div id="totalValue" class="total-value">0 VND</div>
           <div id="billMeta" class="bill-meta">Waiting for checkout</div>
+          <div id="billBreakdown" class="bill-breakdown hidden">
+            <div><span>Tạm tính</span><strong id="grossValue">0 VND</strong></div>
+            <div><span>Voucher</span><strong id="discountValue">−0 VND</strong></div>
+          </div>
+          <button id="confirmPaymentBtn" class="btn btn-primary confirm-btn hidden" type="button">Xác nhận thanh toán</button>
+          <div id="paymentMessage" class="inline-message"></div>
+        </section>
+
+        <section id="rewardPanel" class="reward-panel hidden">
+          <div class="panel-title">Đổi điểm cho lần sau</div>
+          <select id="rewardSelect" class="wide-select"></select>
+          <button id="issueVoucherBtn" class="btn btn-secondary reward-btn" type="button">Đổi voucher</button>
+          <div id="rewardMessage" class="inline-message"></div>
         </section>
 
         <section class="bill-list-panel">

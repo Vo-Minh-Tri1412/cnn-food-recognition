@@ -12,6 +12,9 @@ const state = {
   zoom: 1,
   total: 0,
   regionMeta: {},
+  customer: null,
+  currentBill: null,
+  selectedVoucherId: "",
 };
 
 function setStatus(text) {
@@ -21,6 +24,13 @@ function setStatus(text) {
 
 function setLoading(active) {
   $("loading").classList.toggle("hidden", !active);
+}
+
+function setInlineMessage(id, text, kind = "") {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = `inline-message${kind ? ` ${kind}` : ""}`;
 }
 
 function esc(value) {
@@ -57,6 +67,10 @@ async function init() {
   state.app = await api("/api/state");
   $("imageSelect").innerHTML = optionHtml(state.app.images);
   $("templateSelect").innerHTML = optionHtml(state.app.templates);
+  $("rewardSelect").innerHTML = (state.app.reward_catalog || []).map((reward) => (
+    `<option value="${esc(reward.class_name)}">${esc(reward.display_name)} · ${reward.points_cost} điểm</option>`
+  )).join("");
+  renderCustomer();
   const badge = $("modelBadge");
   if (badge) {
     const classifierReady = state.app.default_model_path ? "Classifier ready" : "Classifier missing";
@@ -70,6 +84,66 @@ async function init() {
   } else {
     setStatus("No demo images found");
   }
+}
+
+function renderCustomer(message = "", kind = "") {
+  const summary = $("memberSummary");
+  const createButton = $("createCustomerBtn");
+  if (!state.customer) {
+    summary.classList.add("hidden");
+    if (!message) createButton.classList.add("hidden");
+    setInlineMessage("customerMessage", message || "Chưa chọn thành viên", kind);
+    state.selectedVoucherId = "";
+    return;
+  }
+
+  createButton.classList.add("hidden");
+  summary.classList.remove("hidden");
+  $("memberPhone").textContent = state.customer.phone_masked;
+  $("memberPoints").textContent = `${state.customer.points_balance} điểm`;
+  const activeVouchers = state.customer.active_vouchers || [];
+  if (!activeVouchers.some((voucher) => voucher.id === state.selectedVoucherId)) {
+    state.selectedVoucherId = "";
+  }
+  $("voucherSelect").innerHTML = [
+    '<option value="">Không dùng voucher</option>',
+    ...activeVouchers.map((voucher) => (
+      `<option value="${esc(voucher.id)}">${esc(voucher.display_name)} · −${fmtVnd(voucher.discount_vnd)}</option>`
+    )),
+  ].join("");
+  $("voucherSelect").value = state.selectedVoucherId;
+  setInlineMessage("customerMessage", message || `${activeVouchers.length} voucher khả dụng`, kind || "success");
+}
+
+async function lookupCustomer() {
+  const phone = $("phoneInput").value.trim();
+  const data = await api("/api/customers/lookup", { phone });
+  if (data.found) {
+    state.customer = data.customer;
+    $("phoneInput").value = "";
+    renderCustomer("Đã tải tài khoản thành viên", "success");
+  } else {
+    state.customer = null;
+    state.selectedVoucherId = "";
+    $("createCustomerBtn").classList.remove("hidden");
+    renderCustomer("Chưa có thành viên. Chọn Tạo mới để đăng ký.");
+    $("createCustomerBtn").classList.remove("hidden");
+  }
+}
+
+async function createCustomer() {
+  const phone = $("phoneInput").value.trim();
+  const data = await api("/api/customers", { phone });
+  state.customer = data.customer;
+  $("phoneInput").value = "";
+  renderCustomer(data.created ? "Đã tạo thành viên" : "Thành viên đã tồn tại", "success");
+}
+
+function clearCustomer() {
+  state.customer = null;
+  state.selectedVoucherId = "";
+  clearBill();
+  renderCustomer("Đã chuyển sang khách vãng lai");
 }
 
 async function loadImage(path) {
@@ -479,7 +553,7 @@ function renderQR(bill) {
   if (!qrContainer) return;
   qrContainer.innerHTML = "";
 
-  const text = `CANTEEN BILL\nTotal: ${fmtVnd(bill.total_vnd)}\nItems: ${bill.items.filter(i=>!i.ignored).length}\nRef: ${bill.bill_path || "checkout"}\nTime: ${new Date().toLocaleString("vi-VN")}`;
+  const text = `CANTEEN BILL\nTotal: ${fmtVnd(bill.net_total_vnd ?? bill.total_vnd)}\nItems: ${bill.items.filter(i=>!i.ignored).length}\nRef: ${bill.bill_id || "checkout"}\nTime: ${new Date().toLocaleString("vi-VN")}`;
 
   // Use QRious or fallback to a QR API
   if (window.QRious) {
@@ -496,12 +570,109 @@ function renderQR(bill) {
   el.style.display = "block";
 }
 
+function ratingSummaryText(summary) {
+  const count = Number(summary?.count || 0);
+  return count ? `★ ${Number(summary.average).toFixed(1)} · ${count} lượt` : "Chưa có đánh giá";
+}
+
+function ratingMarkup(item, paid) {
+  const rateable = paid && !item.ignored && !item.uncertain && Number(item.price_vnd || 0) > 0;
+  if (!rateable) return "";
+  const selected = Number(item.rating?.stars || 0);
+  const stars = [1, 2, 3, 4, 5].map((value) => (
+    `<button class="star-btn${value <= selected ? " active" : ""}" type="button" data-rating-star="${value}" aria-label="${value} sao">★</button>`
+  )).join("");
+  return `
+    <div class="rating-block" data-item-id="${esc(item.bill_item_id)}" data-stars="${selected}">
+      <div class="rating-controls">
+        ${stars}
+        <button class="btn btn-secondary rating-save" type="button" data-save-rating>Lưu</button>
+      </div>
+      <textarea class="rating-comment" maxlength="500" placeholder="Nhận xét tùy chọn">${esc(item.rating?.comment || "")}</textarea>
+      <div class="rating-status">${selected ? "Đã lưu đánh giá" : ""}</div>
+    </div>
+  `;
+}
+
+function wireRatingControls() {
+  document.querySelectorAll(".rating-block").forEach((block) => {
+    block.querySelectorAll("[data-rating-star]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const stars = Number(button.dataset.ratingStar);
+        block.dataset.stars = String(stars);
+        block.querySelectorAll("[data-rating-star]").forEach((candidate) => {
+          candidate.classList.toggle("active", Number(candidate.dataset.ratingStar) <= stars);
+        });
+      });
+    });
+    block.querySelector("[data-save-rating]").addEventListener("click", () => submitRating(block).catch(showError));
+  });
+}
+
+async function submitRating(block) {
+  const stars = Number(block.dataset.stars || 0);
+  const status = block.querySelector(".rating-status");
+  if (!stars) {
+    status.textContent = "Hãy chọn số sao";
+    return;
+  }
+  const data = await api("/api/ratings", {
+    bill_item_id: block.dataset.itemId,
+    customer_id: state.customer?.id || null,
+    stars,
+    comment: block.querySelector(".rating-comment").value,
+  });
+  const item = state.currentBill?.items.find((candidate) => candidate.bill_item_id === block.dataset.itemId);
+  if (item) {
+    item.rating = data.rating;
+    item.rating_summary = data.summary;
+  }
+  const summary = block.closest(".bill-item").querySelector(".rating-summary");
+  if (summary) summary.textContent = ratingSummaryText(data.summary);
+  status.textContent = "Đã lưu đánh giá";
+}
+
+function renderRewardPanel() {
+  const panel = $("rewardPanel");
+  const eligible = state.currentBill?.status === "paid" && state.customer && state.currentBill.customer_id === state.customer.id;
+  panel.classList.toggle("hidden", !eligible);
+  if (!eligible) return;
+  const alreadyIssued = Boolean(state.currentBill.voucher_issued);
+  $("issueVoucherBtn").disabled = alreadyIssued;
+  setInlineMessage(
+    "rewardMessage",
+    alreadyIssued ? "Bill này đã đổi một voucher" : `Số dư hiện tại: ${state.customer.points_balance} điểm`,
+    alreadyIssued ? "success" : "",
+  );
+}
+
 function renderBill(bill) {
-  animateTotal(bill.total_vnd);
+  state.currentBill = bill;
+  if (bill.customer) {
+    state.customer = bill.customer;
+    renderCustomer("Đã cập nhật điểm và voucher", "success");
+  }
+  const netTotal = Number(bill.net_total_vnd ?? bill.total_vnd ?? 0);
+  animateTotal(netTotal);
   const billMetaEl = $("billMeta");
-  if (billMetaEl) billMetaEl.textContent = `${bill.items.filter(i=>!i.ignored).length} món · ${new Date().toLocaleString("vi-VN")}`;
+  if (billMetaEl) {
+    const status = bill.status === "paid" ? "Đã thanh toán" : "Bill nháp";
+    billMetaEl.textContent = `${bill.items.filter(i=>!i.ignored).length} món · ${status}`;
+  }
   const jsonEl = $("billJson");
   if (jsonEl) jsonEl.textContent = JSON.stringify(bill, null, 2);
+  $("billBreakdown").classList.remove("hidden");
+  $("grossValue").textContent = fmtVnd(bill.gross_total_vnd ?? netTotal);
+  $("discountValue").textContent = `−${fmtVnd(bill.discount_vnd || 0)}`;
+  $("confirmPaymentBtn").classList.toggle("hidden", bill.status !== "draft");
+  if (bill.status === "paid") {
+    const message = bill.customer
+      ? `Đã cộng ${bill.earned_points} điểm · Số dư ${bill.customer.points_balance} điểm`
+      : "Đã xác nhận thanh toán ẩn danh";
+    setInlineMessage("paymentMessage", message, "success");
+  } else {
+    setInlineMessage("paymentMessage", "Điểm và voucher chỉ được ghi khi xác nhận");
+  }
 
   $("billList").classList.remove("empty-state");
   $("billList").innerHTML = bill.items.map((item, index) => {
@@ -520,24 +691,33 @@ function renderBill(bill) {
       : item.uncertain
         ? '<span class="tag warn">chưa chắc</span>'
         : '<span class="tag ok">✓</span>';
+    const finalPrice = Number(item.final_price_vnd ?? item.price_vnd ?? 0);
+    const price = Number(item.discount_vnd || 0) > 0
+      ? `<s>${fmtVnd(item.price_vnd)}</s>${fmtVnd(finalPrice)}`
+      : fmtVnd(finalPrice);
+    const summary = item.rating_summary || state.app.rating_summaries?.[item.class_name] || { average: 0, count: 0 };
     return `
       <article class="bill-item">
         <img src="${esc(item.crop_url)}" alt="${esc(item.display_name)} crop">
         <div>
           <strong>${index + 1}. ${esc(item.display_name)} ${tag}</strong>
-          <div class="bill-price">${fmtVnd(item.price_vnd)}</div>
+          <div class="bill-price">${price}</div>
           <div class="confidence"><span style="width:${confPct}%"></span></div>
           <div class="subline">${esc(raw)} · ${confPct}%${evidence.length ? " · " + esc(evidence.join(" · ")) : ""}</div>
+          <div class="rating-summary">${ratingSummaryText(summary)}</div>
+          ${ratingMarkup(item, bill.status === "paid")}
         </div>
       </article>
     `;
   }).join("");
+  wireRatingControls();
   $("cropStrip").innerHTML = bill.items.map((item) => (
     `<img src="${esc(item.crop_url)}" title="${esc(item.class_name)}" alt="${esc(item.class_name)} crop">`
   )).join("");
 
   renderNutrition(bill.items);
   renderQR(bill);
+  renderRewardPanel();
 }
 
 async function runCheckout() {
@@ -555,6 +735,8 @@ async function runCheckout() {
       threshold: thresholdInput ? Number(thresholdInput.value || 0.55) : 0.55,
       use_detector: true,
       detector_threshold: 0.25,
+      customer_id: state.customer?.id || null,
+      voucher_id: state.selectedVoucherId || null,
     });
     renderBill(bill);
     setStatus(`✅ Đã nhận diện xong!`);
@@ -563,11 +745,44 @@ async function runCheckout() {
   }
 }
 
+async function confirmPayment() {
+  if (!state.currentBill?.bill_id || state.currentBill.status !== "draft") return;
+  setLoading(true);
+  setStatus("Đang xác nhận thanh toán...");
+  try {
+    const bill = await api("/api/checkout/confirm", { bill_id: state.currentBill.bill_id });
+    renderBill(bill);
+    setStatus("Đã xác nhận thanh toán");
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function issueVoucher() {
+  if (!state.customer || state.currentBill?.status !== "paid") return;
+  const data = await api("/api/vouchers", {
+    customer_id: state.customer.id,
+    source_bill_id: state.currentBill.bill_id,
+    class_name: $("rewardSelect").value,
+  });
+  state.customer = data.customer;
+  state.currentBill.customer = data.customer;
+  state.currentBill.voucher_issued = true;
+  renderBill(state.currentBill);
+  renderCustomer(`Đã đổi voucher ${data.voucher.display_name}`, "success");
+  setStatus("Voucher đã sẵn sàng cho bill sau");
+}
+
 function clearBill() {
   state.total = 0;
+  state.currentBill = null;
   $("totalValue").textContent = "0 VND";
   const billMetaEl = $("billMeta");
   if (billMetaEl) billMetaEl.textContent = "Waiting for checkout";
+  $("billBreakdown").classList.add("hidden");
+  $("confirmPaymentBtn").classList.add("hidden");
+  $("rewardPanel").classList.add("hidden");
+  setInlineMessage("paymentMessage", "");
   $("billList").className = "bill-list empty-state";
   $("billList").textContent = "No items yet";
   const jsonEl = $("billJson");
@@ -609,6 +824,19 @@ $("fitBtn").addEventListener("click", () => {
 });
 $("clearBillBtn").addEventListener("click", clearBill);
 $("runBtn").addEventListener("click", () => runCheckout().catch(showError));
+$("lookupCustomerBtn").addEventListener("click", () => lookupCustomer().catch(showError));
+$("createCustomerBtn").addEventListener("click", () => createCustomer().catch(showError));
+$("clearCustomerBtn").addEventListener("click", clearCustomer);
+$("confirmPaymentBtn").addEventListener("click", () => confirmPayment().catch(showError));
+$("issueVoucherBtn").addEventListener("click", () => issueVoucher().catch(showError));
+$("voucherSelect").addEventListener("change", (event) => {
+  state.selectedVoucherId = event.target.value;
+  clearBill();
+  setStatus(state.selectedVoucherId ? "Voucher sẽ áp dụng ở lần Predict tiếp theo" : "Đã bỏ chọn voucher");
+});
+$("phoneInput").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") lookupCustomer().catch(showError);
+});
 $("zoomInput").addEventListener("input", (event) => {
   state.zoom = Number(event.target.value);
   draw(false);
