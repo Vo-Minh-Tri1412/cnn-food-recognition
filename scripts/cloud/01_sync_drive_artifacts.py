@@ -20,19 +20,11 @@ from canteen_checkout.config import MODELS_DIR, OUTPUTS_DIR, PROJECT_ROOT, REPOR
 MODEL_FILES = [
     "dish_classifier.pt",
     "class_names.json",
-    "egg_fish_detector.pt",
-    "food_region_detector.pt",
 ]
 
 PACKAGE_FILES = [
     "classification.zip",
     "classification.manifest.json",
-    "egg_fish_yolo.zip",
-    "egg_fish_yolo.manifest.json",
-    "egg_fish_shared_yolo.zip",
-    "egg_fish_shared_yolo.manifest.json",
-    "food_regions_yolo.zip",
-    "food_regions_yolo.manifest.json",
 ]
 
 PROJECT_FILES = [
@@ -44,7 +36,7 @@ PROJECT_FILES = [
     "prices.csv",
 ]
 
-RUN_KINDS = ("classifier", "food_region", "egg_fish")
+RUN_KINDS = ("classifier",)
 
 
 def relative_or_absolute(path: Path) -> str:

@@ -44,12 +44,12 @@ class DriveSyncTests(unittest.TestCase):
     def test_latest_model_run_is_scoped_by_model(self):
         with tempfile.TemporaryDirectory() as tmp:
             drive_root = Path(tmp)
-            older = drive_root / "runs" / "food_region" / "20260101_000000"
-            newer = drive_root / "runs" / "food_region" / "20260102_000000"
-            unrelated = drive_root / "runs" / "classifier" / "20260103_000000"
+            older = drive_root / "runs" / "classifier" / "20260101_000000"
+            newer = drive_root / "runs" / "classifier" / "20260102_000000"
+            unrelated = drive_root / "runs" / "other" / "20260103_000000"
             for path in (older, newer, unrelated):
                 path.mkdir(parents=True)
-            self.assertEqual(drive_sync.latest_model_run(drive_root, "food_region"), newer)
+            self.assertEqual(drive_sync.latest_model_run(drive_root, "classifier"), newer)
 
 
 if __name__ == "__main__":

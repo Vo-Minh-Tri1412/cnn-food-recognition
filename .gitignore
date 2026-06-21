@@ -15,7 +15,6 @@ data/extras/
 data/classification/
 data/downloads/
 data/download/
-data/detection/
 data/scraped_candidates/
 data/processed_candidates/
 data/rejected_candidates/
@@ -23,7 +22,6 @@ data/temp_teacher_crops/
 data/archive/
 data/quarantine/
 data/scraped_manifest.csv
-ultralytics/
 runs/
 models/archive
 models/candidates
