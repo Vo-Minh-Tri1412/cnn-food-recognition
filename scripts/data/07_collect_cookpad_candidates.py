@@ -167,6 +167,15 @@ DEFAULT_QUERIES_BY_CLASS = {
         "tofu tomato sauce",
         "Vietnamese tofu tomato sauce",
     ],
+    "suon_nuong": [
+        "cơm tấm sườn nướng",
+        "cơm sườn nướng",
+        "sườn cốt lết nướng",
+        "cốt lết nướng",
+        "cơm phần sườn nướng",
+        "khay cơm sườn nướng",
+        "Vietnamese grilled pork chop rice",
+    ],
 }
 
 TEXT_FILTERS = {
@@ -271,6 +280,33 @@ TEXT_FILTERS = {
             "bánh",
         ],
         "model_allow": {"dau_hu_sot_ca"},
+    },
+    "suon_nuong": {
+        "positive": [
+            "cơm tấm",
+            "cơm sườn",
+            "sườn nướng",
+            "sườn cốt lết",
+            "cốt lết nướng",
+            "grilled pork chop",
+            "pork chop rice",
+        ],
+        "negative": [
+            "sườn non",
+            "sườn que",
+            "sườn cây",
+            "bbq ribs",
+            "pork ribs",
+            "sườn xào",
+            "sườn rim",
+            "sườn chua ngọt",
+            "canh sườn",
+            "cháo sườn",
+            "bún",
+            "mì",
+            "lẩu",
+        ],
+        "model_allow": {"suon_nuong"},
     },
 }
 

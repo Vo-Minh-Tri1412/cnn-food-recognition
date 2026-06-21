@@ -3,13 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from itertools import permutations
 
 from PIL import Image
 
-from .cropping import CropRegion
+from .cropping import CropRegion, five_compartment_template
 
 
 FOOD_REGION_CLASS = "food_region"
+EXPECTED_REGION_COUNT = 5
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,11 @@ def regions_from_candidates(
         return (), "no_regions"
     if len(valid) > max_regions:
         return (), "too_many_regions"
+    if len(valid) != EXPECTED_REGION_COUNT:
+        return (), f"unexpected_region_count:{len(valid)}"
+
+    if not _plausible_five_region_layout(valid, image_width, image_height):
+        return (), "implausible_five_region_layout"
 
     valid.sort(key=lambda row: (((row.xyxy[1] + row.xyxy[3]) / 2.0), ((row.xyxy[0] + row.xyxy[2]) / 2.0)))
     regions: list[CropRegion] = []
@@ -106,6 +113,51 @@ def regions_from_candidates(
             )
         )
     return tuple(regions), ""
+
+
+def _candidate_iou(left: RegionCandidate, right: RegionCandidate) -> float:
+    lx1, ly1, lx2, ly2 = left.xyxy
+    rx1, ry1, rx2, ry2 = right.xyxy
+    intersection = max(0.0, min(lx2, rx2) - max(lx1, rx1)) * max(0.0, min(ly2, ry2) - max(ly1, ry1))
+    left_area = max(0.0, lx2 - lx1) * max(0.0, ly2 - ly1)
+    right_area = max(0.0, rx2 - rx1) * max(0.0, ry2 - ry1)
+    union = left_area + right_area - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _plausible_five_region_layout(
+    candidates: list[RegionCandidate],
+    image_width: int,
+    image_height: int,
+    *,
+    max_pair_iou: float = 0.25,
+    max_center_distance: float = 0.18,
+) -> bool:
+    for index, candidate in enumerate(candidates):
+        if any(_candidate_iou(candidate, other) > max_pair_iou for other in candidates[index + 1 :]):
+            return False
+
+    expected = five_compartment_template(image_width, image_height)
+    expected_centers = [
+        ((region.x + region.w / 2.0) / image_width, (region.y + region.h / 2.0) / image_height)
+        for region in expected
+    ]
+    detected_centers = [
+        (
+            ((candidate.xyxy[0] + candidate.xyxy[2]) / 2.0) / image_width,
+            ((candidate.xyxy[1] + candidate.xyxy[3]) / 2.0) / image_height,
+        )
+        for candidate in candidates
+    ]
+    for assignment in permutations(range(EXPECTED_REGION_COUNT)):
+        distances = [
+            ((detected_centers[index][0] - expected_centers[slot][0]) ** 2 +
+             (detected_centers[index][1] - expected_centers[slot][1]) ** 2) ** 0.5
+            for index, slot in enumerate(assignment)
+        ]
+        if max(distances) <= max_center_distance:
+            return True
+    return False
 
 
 def detect_food_regions(

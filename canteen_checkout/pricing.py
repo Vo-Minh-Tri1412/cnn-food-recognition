@@ -25,7 +25,10 @@ def dish_price(
     uncertain: bool = False,
     egg_count: int | None = None,
 ) -> BillPrice:
-    if uncertain or class_name not in prices:
+    # Keep uncertain predictions visibly flagged, but bill the model's best
+    # known class instead of silently turning the item into a zero-price dish.
+    _ = uncertain
+    if class_name not in prices:
         return BillPrice(base_price_vnd=0, extra_price_vnd=0, total_price_vnd=0)
 
     base_price = prices[class_name].price_vnd

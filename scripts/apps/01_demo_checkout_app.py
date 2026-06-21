@@ -35,7 +35,15 @@ from canteen_checkout.config import (
     PROJECT_ROOT,
 )
 from canteen_checkout.cropping import CropRegion, crop_regions, five_compartment_template, load_regions
-from canteen_checkout.detector import detect_objects, empty_evidence, fuse_decision, load_yolo_detector
+from canteen_checkout.detector import (
+    EGG_CLASS,
+    FISH_CLASS,
+    detect_objects,
+    empty_evidence,
+    fuse_decision,
+    load_yolo_detector,
+    partition_evidence_by_regions,
+)
 from canteen_checkout.engagement import EngagementError, EngagementStore
 from canteen_checkout.io_utils import load_prices
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
@@ -286,6 +294,8 @@ def run_checkout(payload: dict) -> dict:
     detector_path = resolve_project_path(str(payload.get("detector_path") or DEFAULT_DETECTOR_PATH))
     use_detector = bool(payload.get("use_detector", True))
     detector_threshold = float(payload.get("detector_threshold", 0.25))
+    egg_detector_threshold = float(payload.get("egg_detector_threshold", 0.15))
+    fish_detector_threshold = float(payload.get("fish_detector_threshold", detector_threshold))
     threshold = float(payload.get("threshold", 0.55))
     regions, region_metadata = regions_from_payload(payload, image_path)
 
@@ -309,9 +319,20 @@ def run_checkout(payload: dict) -> dict:
         detector = load_detector_once(detector_path)
         detector_loaded = True
 
+    tray_evidence = empty_evidence(detector_path, detector_loaded)
+    if detector is not None:
+        tray_evidence = detect_objects(
+            detector,
+            image_path,
+            detector_path=detector_path,
+            confidence=min(egg_detector_threshold, fish_detector_threshold),
+            class_thresholds={EGG_CLASS: egg_detector_threshold, FISH_CLASS: fish_detector_threshold},
+        )
+    region_evidence = partition_evidence_by_regions(tray_evidence, regions)
+
     items = []
     total = 0
-    for crop_path, region in zip(crop_paths, regions):
+    for crop_path, region, evidence in zip(crop_paths, regions, region_evidence):
         forced_label = region.label or ""
         ignored = forced_label in IGNORE_LABELS
         if ignored:
@@ -332,11 +353,9 @@ def run_checkout(payload: dict) -> dict:
 
         raw_class_name = class_name
         raw_confidence = confidence
-        evidence = empty_evidence(detector_path, detector_loaded)
         fusion_reason = "classifier_only"
         final_egg_count = 1 if class_name == THIT_KHO_TRUNG_CLASS else None
         if detector is not None and not ignored and not forced_label:
-            evidence = detect_objects(detector, crop_path, detector_path=detector_path, confidence=detector_threshold)
             fusion = fuse_decision(
                 raw_class_name=raw_class_name,
                 raw_confidence=raw_confidence,
@@ -394,6 +413,9 @@ def run_checkout(payload: dict) -> dict:
         "use_detector": use_detector,
         "threshold": threshold,
         "detector_threshold": detector_threshold,
+        "egg_detector_threshold": egg_detector_threshold,
+        "fish_detector_threshold": fish_detector_threshold,
+        "tray_detector_evidence": tray_evidence.as_dict(),
         "region_source": region_metadata.get("region_source", region_source(regions)),
         "region_detector_path": region_metadata.get("region_detector_path"),
         "region_detector_loaded": bool(region_metadata.get("region_detector_loaded", False)),

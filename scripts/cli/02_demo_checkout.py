@@ -21,7 +21,15 @@ from canteen_checkout.config import (
     DEFAULT_REGION_DETECTOR_PATH,
 )
 from canteen_checkout.cropping import crop_regions, five_compartment_template, load_regions
-from canteen_checkout.detector import detect_objects, empty_evidence, fuse_decision, load_yolo_detector
+from canteen_checkout.detector import (
+    EGG_CLASS,
+    FISH_CLASS,
+    detect_objects,
+    empty_evidence,
+    fuse_decision,
+    load_yolo_detector,
+    partition_evidence_by_regions,
+)
 from canteen_checkout.io_utils import load_prices
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 from canteen_checkout.pricing import THIT_KHO_TRUNG_CLASS, dish_price
@@ -44,7 +52,9 @@ def main() -> None:
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--detector", type=Path, default=DEFAULT_DETECTOR_PATH)
     parser.add_argument("--use-detector", action="store_true", help="Use YOLO egg/fish detector fusion if the detector exists.")
-    parser.add_argument("--detector-threshold", type=float, default=0.25)
+    parser.add_argument("--detector-threshold", type=float, default=0.25, help="Legacy detector threshold kept for bill metadata.")
+    parser.add_argument("--egg-detector-threshold", type=float, default=0.15)
+    parser.add_argument("--fish-detector-threshold", type=float, default=0.25)
     parser.add_argument("--regions-json", type=Path, default=None)
     parser.add_argument("--region-mode", choices=("auto", "template"), default="auto")
     parser.add_argument("--region-detector", type=Path, default=DEFAULT_REGION_DETECTOR_PATH)
@@ -121,9 +131,20 @@ def main() -> None:
         else:
             print(f"Detector not found: {args.detector}. Fusion disabled.")
 
+    tray_evidence = empty_evidence(args.detector, detector_loaded)
+    if detector is not None:
+        tray_evidence = detect_objects(
+            detector,
+            image_path,
+            detector_path=args.detector,
+            confidence=min(args.egg_detector_threshold, args.fish_detector_threshold),
+            class_thresholds={EGG_CLASS: args.egg_detector_threshold, FISH_CLASS: args.fish_detector_threshold},
+        )
+    region_evidence = partition_evidence_by_regions(tray_evidence, regions)
+
     items = []
     total = 0
-    for crop_path, region in zip(crop_paths, regions):
+    for crop_path, region, evidence in zip(crop_paths, regions, region_evidence):
         forced_label = region.label or ""
         ignored = region.name in ignored_regions or forced_label in {"ignore", "ignored", "unknown", "other", "extra"}
         if ignored:
@@ -144,11 +165,9 @@ def main() -> None:
 
         raw_class_name = class_name
         raw_confidence = confidence
-        evidence = empty_evidence(args.detector, detector_loaded)
         fusion_reason = "classifier_only"
         final_egg_count = 1 if class_name == THIT_KHO_TRUNG_CLASS else None
         if detector is not None and not ignored and not forced_label:
-            evidence = detect_objects(detector, crop_path, detector_path=args.detector, confidence=args.detector_threshold)
             fusion = fuse_decision(
                 raw_class_name=raw_class_name,
                 raw_confidence=raw_confidence,
@@ -203,6 +222,9 @@ def main() -> None:
         "detector_loaded": detector_loaded,
         "threshold": args.threshold,
         "detector_threshold": args.detector_threshold,
+        "egg_detector_threshold": args.egg_detector_threshold,
+        "fish_detector_threshold": args.fish_detector_threshold,
+        "tray_detector_evidence": tray_evidence.as_dict(),
         "region_source": region_source,
         "region_detector_path": str(args.region_detector) if args.region_detector.exists() else None,
         "region_detector_loaded": region_detector_loaded,

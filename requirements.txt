@@ -3,6 +3,8 @@ torchvision
 torchaudio
 ultralytics
 opencv-python
+numpy
+pillow
 pandas
 matplotlib
 scikit-learn

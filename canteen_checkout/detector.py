@@ -6,6 +6,8 @@ from typing import Any
 
 from PIL import Image
 
+from .cropping import CropRegion
+
 
 EGG_CLASS = "egg"
 FISH_CLASS = "fish"
@@ -96,6 +98,7 @@ def detect_objects(
     detector_path: Path | None = None,
     confidence: float = 0.25,
     iou: float = 0.5,
+    class_thresholds: dict[str, float] | None = None,
 ) -> DetectorEvidence:
     if detector is None:
         return empty_evidence(detector_path, loaded=False)
@@ -105,7 +108,8 @@ def detect_objects(
     with Image.open(image_path) as image:
         image.verify()
 
-    results = detector.predict(str(image_path), conf=confidence, iou=iou, verbose=False)
+    prediction_confidence = min([confidence, *(class_thresholds or {}).values()])
+    results = detector.predict(str(image_path), conf=prediction_confidence, iou=iou, verbose=False)
     if not results:
         return empty_evidence(detector_path, loaded=True)
 
@@ -118,6 +122,8 @@ def detect_objects(
             class_id = int(box.cls[0].item())
             class_name = _class_name(names, class_id)
             conf = float(box.conf[0].item())
+            if class_thresholds and conf < class_thresholds.get(class_name, confidence):
+                continue
             xyxy_values = tuple(float(value) for value in box.xyxy[0].detach().cpu().tolist())
             detections.append(ObjectDetection(class_name=class_name, confidence=conf, xyxy=xyxy_values))
 
@@ -128,6 +134,47 @@ def detect_objects(
         detector_loaded=True,
         detector_path=str(detector_path) if detector_path else None,
     )
+
+
+def partition_evidence_by_regions(
+    evidence: DetectorEvidence,
+    regions: list[CropRegion],
+) -> list[DetectorEvidence]:
+    """Assign tray-space detections to one crop and return crop-local evidence."""
+    assigned: list[list[ObjectDetection]] = [[] for _ in regions]
+    for detection in evidence.detections:
+        left, top, right, bottom = detection.xyxy
+        center_x = (left + right) / 2.0
+        center_y = (top + bottom) / 2.0
+        matches = [
+            index
+            for index, region in enumerate(regions)
+            if region.x <= center_x <= region.x + region.w and region.y <= center_y <= region.y + region.h
+        ]
+        if not matches:
+            continue
+        index = min(matches, key=lambda value: regions[value].w * regions[value].h)
+        region = regions[index]
+        local_box = (
+            max(0.0, left - region.x),
+            max(0.0, top - region.y),
+            min(float(region.w), right - region.x),
+            min(float(region.h), bottom - region.y),
+        )
+        if local_box[2] <= local_box[0] or local_box[3] <= local_box[1]:
+            continue
+        assigned[index].append(ObjectDetection(detection.class_name, detection.confidence, local_box))
+
+    return [
+        DetectorEvidence(
+            egg_count=sum(1 for detection in detections if detection.class_name == EGG_CLASS),
+            fish_count=sum(1 for detection in detections if detection.class_name == FISH_CLASS),
+            detections=tuple(detections),
+            detector_loaded=evidence.detector_loaded,
+            detector_path=evidence.detector_path,
+        )
+        for detections in assigned
+    ]
 
 
 def fuse_decision(

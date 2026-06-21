@@ -25,3 +25,7 @@ data/quarantine/
 data/scraped_manifest.csv
 ultralytics/
 runs/
+models/archive
+models/candidates
+.pytest_cache
+data/staging

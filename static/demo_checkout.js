@@ -563,6 +563,8 @@ async function runCheckout() {
       threshold: thresholdInput ? Number(thresholdInput.value || 0.55) : 0.55,
       use_detector: true,
       detector_threshold: 0.25,
+      egg_detector_threshold: 0.15,
+      fish_detector_threshold: 0.25,
       customer_id: state.customer?.id || null,
       voucher_id: state.selectedVoucherId || null,
     });

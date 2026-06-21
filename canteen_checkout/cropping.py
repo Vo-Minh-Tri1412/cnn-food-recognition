@@ -28,21 +28,18 @@ def clamp_region(region: CropRegion, image_width: int, image_height: int) -> Cro
 
 
 def five_compartment_template(image_width: int, image_height: int) -> list[CropRegion]:
-    """Approximate regions for common UEH metal trays.
-
-    This is a starting point for MVP demos. For accurate crops, create a JSON
-    file with manual regions from scripts/cli/01_crop_tray.py --interactive.
-    """
+    """Relative regions for the fixed-camera UEH five-compartment tray."""
     w = image_width
     h = image_height
     if w >= h:
-        # Landscape image: split into rough tray cells.
+        # Calibrated from the official 1920x1080 checkout camera. Coordinates
+        # remain relative so resized frames use the same physical tray layout.
         rel_regions = [
-            ("top_left", 0.05, 0.06, 0.30, 0.36),
-            ("bottom_left", 0.05, 0.48, 0.30, 0.38),
-            ("center", 0.38, 0.18, 0.24, 0.50),
-            ("top_right", 0.66, 0.06, 0.28, 0.36),
-            ("bottom_right", 0.66, 0.48, 0.28, 0.38),
+            ("top_left", 0.172, 0.069, 0.271, 0.445),
+            ("top_right", 0.536, 0.065, 0.224, 0.463),
+            ("bottom_left", 0.143, 0.509, 0.221, 0.389),
+            ("bottom_center", 0.365, 0.532, 0.193, 0.352),
+            ("bottom_right", 0.563, 0.537, 0.198, 0.370),
         ]
     else:
         # Portrait image: common phone photos of one vertical tray.
