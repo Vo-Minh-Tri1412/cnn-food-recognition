@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from canteen_checkout.config import CLASSIFICATION_DIR, CROPPED_DISHES_DIR, DEFAULT_REGION_DETECTOR_PATH, DISH_CLASSES
+from canteen_checkout.config import CLASSIFICATION_DIR, CROPPED_DISHES_DIR, DISH_CLASSES
 from canteen_checkout.cropping import (
     crop_regions,
     five_compartment_template,
@@ -15,8 +15,6 @@ from canteen_checkout.cropping import (
     save_regions,
     select_regions_interactive,
 )
-from canteen_checkout.detector import load_yolo_detector
-from canteen_checkout.region_detector import detect_food_regions
 
 
 def main() -> None:
@@ -26,9 +24,6 @@ def main() -> None:
     parser.add_argument("--regions-json", type=Path, default=None)
     parser.add_argument("--save-regions", type=Path, default=None)
     parser.add_argument("--interactive", action="store_true")
-    parser.add_argument("--region-mode", choices=("auto", "template"), default="auto")
-    parser.add_argument("--region-detector", type=Path, default=DEFAULT_REGION_DETECTOR_PATH)
-    parser.add_argument("--region-threshold", type=float, default=0.35)
     parser.add_argument(
         "--add-to-dataset",
         choices=["train", "val", "test"],
@@ -44,29 +39,7 @@ def main() -> None:
         regions = select_regions_interactive(image_path)
     elif args.regions_json:
         regions = load_regions(args.regions_json)
-    elif args.region_mode == "auto" and args.region_detector.exists():
-        detector = load_yolo_detector(args.region_detector)
-        result = detect_food_regions(
-            detector,
-            image_path,
-            detector_path=args.region_detector,
-            confidence=args.region_threshold,
-        )
-        if result.regions:
-            regions = list(result.regions)
-            print(f"Auto-detected {len(regions)} food regions")
-        else:
-            print(f"Region detector fallback: {result.fallback_reason}")
-            import cv2
-
-            image = cv2.imread(str(image_path))
-            if image is None:
-                raise ValueError(f"Could not read image: {image_path}")
-            h, w = image.shape[:2]
-            regions = five_compartment_template(w, h)
     else:
-        if args.region_mode == "auto":
-            print(f"Region detector not found: {args.region_detector}. Using template fallback.")
         import cv2
 
         image = cv2.imread(str(image_path))

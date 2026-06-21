@@ -66,7 +66,6 @@ class DemoEngagementApiTests(unittest.TestCase):
                 "customer_id": customer_id,
                 "voucher_id": voucher_id,
                 "model_path": "models/missing-test-model.pt",
-                "use_detector": False,
             },
         )
 

@@ -25,7 +25,6 @@ from PIL import Image
 from canteen_checkout.config import (
     CLASSIFICATION_DIR,
     DATA_DIR,
-    DEFAULT_DETECTOR_PATH,
     DEFAULT_MODEL_PATH,
     DISH_CLASSES,
     EXTRAS_DIR,
@@ -35,14 +34,6 @@ from canteen_checkout.config import (
     REVIEWED_DIR,
 )
 from canteen_checkout.data_quality import assess_image, hamming_distance_hex
-from canteen_checkout.detector import (
-    EGG_RELATED_CLASSES,
-    FISH_RELATED_CLASSES,
-    detect_objects,
-    empty_evidence,
-    fuse_decision,
-    load_yolo_detector,
-)
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 
 
@@ -60,7 +51,6 @@ ACTION_FIELDS = [
 DONE_FIELDS = ["timestamp", "item_id", "path", "root", "folder", "class_name", "note"]
 
 MODEL_CACHE: dict[str, object] = {}
-DETECTOR_CACHE: dict[str, object] = {}
 METRIC_CACHE: dict[str, tuple[float, int, object]] = {}
 PATH_CACHE: dict[tuple[str, str], list[tuple[Path, str, str]]] = {}
 COUNT_CACHE: dict[str, dict[str, object]] = {}
@@ -370,16 +360,6 @@ def load_model_once(model_path: Path):
     return cached
 
 
-def load_detector_once(detector_path: Path):
-    key = str(detector_path.resolve())
-    cached = DETECTOR_CACHE.get(key)
-    if cached:
-        return cached
-    detector = load_yolo_detector(detector_path)
-    DETECTOR_CACHE[key] = detector
-    return detector
-
-
 @torch.no_grad()
 def predict_item(item: DataItem, threshold: float) -> dict[str, object]:
     model, class_names, image_size, checkpoint, device = load_model_once(DEFAULT_MODEL_PATH)
@@ -403,21 +383,6 @@ def predict_item(item: DataItem, threshold: float) -> dict[str, object]:
         decision = "small_margin"
     else:
         decision = "ok"
-    relevant_classes = EGG_RELATED_CLASSES | FISH_RELATED_CLASSES
-    detector_error = ""
-    evidence = empty_evidence(DEFAULT_DETECTOR_PATH, loaded=False)
-    if DEFAULT_DETECTOR_PATH.exists() and {item.class_name, top1, top2} & relevant_classes:
-        try:
-            detector = load_detector_once(DEFAULT_DETECTOR_PATH)
-            evidence = detect_objects(detector, item.path, detector_path=DEFAULT_DETECTOR_PATH)
-        except Exception as exc:
-            detector_error = str(exc)
-    fusion = fuse_decision(
-        raw_class_name=top1,
-        raw_confidence=top1_conf,
-        uncertain=top1_conf < threshold or margin < 0.15,
-        evidence=evidence,
-    )
     return {
         "top1": top1,
         "top1_confidence": round(top1_conf, 4),
@@ -426,13 +391,6 @@ def predict_item(item: DataItem, threshold: float) -> dict[str, object]:
         "margin": round(margin, 4),
         "decision": decision,
         "model_arch": checkpoint.get("arch", ""),
-        "detector_loaded": evidence.detector_loaded,
-        "detector_error": detector_error,
-        "egg_count": evidence.egg_count,
-        "fish_count": evidence.fish_count,
-        "detections": [detection.as_dict() for detection in evidence.detections],
-        "fusion_class": fusion.class_name,
-        "fusion_reason": fusion.fusion_reason,
     }
 
 
@@ -448,8 +406,6 @@ class DataIDE:
             "classes": DISH_CLASSES,
             "log": relative_or_absolute(action_log()),
             "model_path": relative_or_absolute(DEFAULT_MODEL_PATH) if DEFAULT_MODEL_PATH.exists() else "",
-            "detector_path": relative_or_absolute(DEFAULT_DETECTOR_PATH) if DEFAULT_DETECTOR_PATH.exists() else "",
-            "detector_available": DEFAULT_DETECTOR_PATH.exists(),
         }
 
     def folders(self, root_value: str) -> dict[str, object]:
@@ -765,12 +721,11 @@ function renderGrid(){
   $('grid').innerHTML=state.items.map((it,idx)=>{
     const p=state.preds[it.id];
     const dec=p?`<span class="pill ${p.decision==='ok'?'ok':p.decision.includes('disagreement')?'bad':'warn'}">${esc(p.decision)}</span>`:'';
-    const detector=p&&p.detector_loaded?`<div class=small>YOLO egg ${esc(p.egg_count)} · fish ${esc(p.fish_count)}<br>fusion ${esc(p.fusion_class)} · ${esc(p.fusion_reason)}</div>`:(p&&p.detector_error?`<div class="small bad">YOLO error: ${esc(p.detector_error)}</div>`:'');
     const row=Math.floor(idx/cols);
     const keyIndex=idx%cols;
     const key=keyIndex===9?'0':String(keyIndex+1);
     const active=row===state.cursorRow;
-    return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}" loading="lazy"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div>${detector}<div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`;
+    return `<div class="card ${state.selected.has(it.id)?'selected':''} ${active?'active-row':''}" data-id="${esc(it.id)}" data-index="${idx}"><div class="${active?'keycap':'keycap muted'}">${key}</div><img src="${esc(it.image_url)}" loading="lazy"><div class=body><b>${esc(it.class_name)}</b> <span class=pill>${esc(it.split||'root')}</span> ${dec}<div class=small>${esc(it.filename)}</div><div class=small>${esc(it.source)}</div>${p?`<div class=small>top1 ${esc(p.top1)} ${esc(p.top1_confidence)}<br>top2 ${esc(p.top2)} ${esc(p.top2_confidence)} · margin ${esc(p.margin)}</div><div class=row><button data-fb="yes">Model đúng</button><button data-fb="no">Model sai</button></div>`:''}</div></div>`;
   }).join('');
   document.querySelectorAll('.card').forEach(card=>{
     card.onclick=e=>{

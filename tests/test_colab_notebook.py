@@ -30,36 +30,12 @@ class ColabNotebookTests(unittest.TestCase):
             self.assertIsNone(cell["execution_count"])
             self.assertEqual(cell["outputs"], [])
 
-    def test_notebook_is_colab_only_and_has_expected_sections(self):
-        expected = [
-            "## 1. Tổng quan quy trình và chuẩn bị dữ liệu trên máy local",
-            "## 2. Chuẩn bị chung trên Google Colab",
-            "## 3. Mô hình phân loại 11 món ăn",
-            "## 4. Mô hình phát hiện vùng thức ăn `food_region`",
-            "## 5. Mô hình phát hiện phụ trợ `egg`/`fish`",
-            "## 6. Đưa mô hình và báo cáo về máy local bằng Google Drive Desktop",
-        ]
-        positions = [self.markdown.index(title) for title in expected]
-        self.assertEqual(positions, sorted(positions))
-        self.assertNotIn("Kaggle", self.markdown)
-        self.assertNotIn("files.upload", self.code)
+    def test_notebook_is_classifier_only(self):
+        self.assertIn("CNN dish classifier", self.markdown)
         self.assertIn('BRANCH = "main"', self.code)
-
-    def test_each_model_writes_to_its_own_drive_run(self):
-        self.assertIn('tao_run("classifier")', self.code)
-        self.assertIn('tao_run("food_region")', self.code)
-        self.assertIn('tao_run("egg_fish")', self.code)
-        self.assertIn('DRIVE_MODELS / "dish_classifier.pt"', self.code)
-        self.assertIn('DRIVE_MODELS / "food_region_detector.pt"', self.code)
-        self.assertIn('DRIVE_MODELS / "egg_fish_detector.pt"', self.code)
-        self.assertNotIn("Lưu model/report về Google Drive", self.markdown)
-
-    def test_yolo_sections_use_runtime_weight_cache(self):
-        self.assertEqual(self.code.count('"--weights-cache", YOLO_CACHE_ROOT'), 2)
-
-    def test_classifier_uses_early_stopping(self):
-        self.assertIn("CLS_PATIENCE = 3", self.code)
-        self.assertIn('"--patience", CLS_PATIENCE', self.code)
+        self.assertIn("01_train_classifier.py", self.code)
+        self.assertIn("dish_classifier.pt", self.code)
+        self.assertIn("--patience", self.code)
 
 
 if __name__ == "__main__":

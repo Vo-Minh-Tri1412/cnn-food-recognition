@@ -7,7 +7,7 @@ const state = {
   imageWidth: 0,
   imageHeight: 0,
   regions: [],
-  regionMode: "auto",
+  regionMode: "template",
   zoom: 1,
   total: 0,
   regionMeta: {},
@@ -72,11 +72,8 @@ async function init() {
   const badge = $("modelBadge");
   if (badge) {
     const classifierReady = state.app.default_model_path ? "Classifier ready" : "Classifier missing";
-    const detectorReady = state.app.default_detector_path ? "Detector ready" : "Detector missing";
-    const regionReady = state.app.default_region_detector_path ? "Region AI ready" : "Region AI missing";
-    const readyCount = [classifierReady, detectorReady, regionReady].filter((status) => status.endsWith("ready")).length;
-    badge.textContent = `${readyCount}/3 models ready`;
-    badge.title = `${classifierReady} · ${regionReady} · ${detectorReady}`;
+    badge.textContent = classifierReady;
+    badge.title = "CNN dish classifier";
   }
 
   if (state.app.images.length) {
@@ -241,14 +238,6 @@ function draw() {
   });
 }
 
-function renderRegionMode() {
-  const auto = state.regionMode === "auto";
-  $("autoRegionBtn").classList.toggle("active", auto);
-  $("fixedRegionBtn").classList.toggle("active", !auto);
-  $("autoRegionBtn").setAttribute("aria-pressed", String(auto));
-  $("fixedRegionBtn").setAttribute("aria-pressed", String(!auto));
-}
-
 async function applyFixedRegions() {
   if (!state.imagePath) return;
   const data = await api("/api/regions", {
@@ -262,35 +251,8 @@ async function applyFixedRegions() {
   setStatus(`Fixed grid ready · ${state.regions.length} regions`);
 }
 
-async function applyAutoRegions() {
-  if (!state.imagePath) return;
-  setStatus("Detecting food regions...");
-  const data = await api("/api/regions", {
-    image_path: state.imagePath,
-    mode: "auto",
-    region_threshold: 0.35,
-    template: "",
-  });
-  state.regions = data.regions;
-  state.regionMeta = data;
-  draw();
-  if (data.region_source === "auto_detector") {
-    setStatus(`AI found ${state.regions.length} food regions`);
-  } else {
-    setStatus(`Using grid fallback: ${data.fallback_reason || "detector unavailable"}`);
-  }
-}
-
 async function applyRegionsForMode() {
-  renderRegionMode();
-  if (state.regionMode === "fixed") await applyFixedRegions();
-  else await applyAutoRegions();
-}
-
-async function setRegionMode(mode) {
-  state.regionMode = mode;
-  clearBill();
-  await applyRegionsForMode();
+  await applyFixedRegions();
 }
 
 function animateTotal(toValue) {
@@ -510,14 +472,6 @@ function renderBill(bill) {
   $("billList").innerHTML = bill.items.map((item, index) => {
     const confidence = Math.max(0, Math.min(1, Number(item.confidence || 0)));
     const confPct = Math.round(confidence * 100);
-    const raw = item.raw_class_name && item.raw_class_name !== item.class_name
-      ? `${item.raw_class_name} → ${item.class_name}`
-      : item.class_name;
-    const evidence = [];
-    const detectorEgg = Number(item.detector_evidence?.egg_count || 0);
-    if (detectorEgg > 0) evidence.push(`egg=${detectorEgg}`);
-    if (Number(item.fish_count || 0) > 0) evidence.push(`fish=${item.fish_count}`);
-    if (item.fusion_reason && item.fusion_reason !== "classifier_only") evidence.push(item.fusion_reason);
     const tag = item.ignored
       ? '<span class="tag muted">bỏ qua</span>'
       : item.uncertain
@@ -535,7 +489,7 @@ function renderBill(bill) {
           <strong>${index + 1}. ${esc(item.display_name)} ${tag}</strong>
           <div class="bill-price">${price}</div>
           <div class="confidence"><span style="width:${confPct}%"></span></div>
-          <div class="subline">${esc(raw)} · ${confPct}%${evidence.length ? " · " + esc(evidence.join(" · ")) : ""}</div>
+          <div class="subline">${esc(item.class_name)} · ${confPct}% · CNN</div>
           <div class="rating-summary">${ratingSummaryText(summary)}</div>
           ${ratingMarkup(item, bill.status === "paid")}
         </div>
@@ -557,12 +511,9 @@ async function runCheckout() {
     const bill = await api("/api/run", {
       image_path: state.imagePath,
       regions: state.regions,
-      region_mode: state.regionMeta.requested_mode || state.regionMode,
+      region_mode: "template",
       region_metadata: state.regionMeta,
-      region_threshold: 0.35,
       threshold: thresholdInput ? Number(thresholdInput.value || 0.55) : 0.55,
-      use_detector: true,
-      detector_threshold: 0.25,
       customer_id: state.customer?.id || null,
       voucher_id: state.selectedVoucherId || null,
     });
@@ -623,8 +574,6 @@ function clearBill() {
 
 $("loadImageBtn").addEventListener("click", () => loadImage($("imageSelect").value).catch(showError));
 $("imageSelect").addEventListener("change", () => loadImage($("imageSelect").value).catch(showError));
-$("autoRegionBtn").addEventListener("click", () => setRegionMode("auto").catch(showError));
-$("fixedRegionBtn").addEventListener("click", () => setRegionMode("fixed").catch(showError));
 $("fitBtn").addEventListener("click", () => {
   state.zoom = 1;
   $("zoomInput").value = "1";

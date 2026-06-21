@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torchvision.datasets.folder import default_loader
 from tqdm import tqdm
 
-from canteen_checkout.config import CLASSIFICATION_DIR, DEFAULT_MODEL_PATH, DISH_CLASSES, REPORTS_DIR
+from canteen_checkout.config import CLASSIFICATION_DIR, DEFAULT_MODEL_PATH, DISH_CLASSES, PROJECT_ROOT, REPORTS_DIR
 from canteen_checkout.io_utils import IMAGE_EXTENSIONS, save_class_names
 from canteen_checkout.model import (
     SUPPORTED_AUGMENTATIONS,
@@ -208,6 +208,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train dish classifier.")
     parser.add_argument("--data", type=Path, default=CLASSIFICATION_DIR)
     parser.add_argument("--model-out", type=Path, default=DEFAULT_MODEL_PATH)
+    parser.add_argument("--init-checkpoint", type=Path, default=None, help="Initialize from a compatible classifier checkpoint instead of ImageNet weights.")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--patience", type=int, default=3, help="Stop after this many epochs without better validation accuracy; use 0 to disable.")
     parser.add_argument("--batch-size", type=int, default=8)
@@ -278,7 +279,19 @@ def main() -> None:
     val_loader = DataLoader(val_ds if len(val_ds) else train_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     test_loader = DataLoader(test_ds if len(test_ds) else val_ds if len(val_ds) else train_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
-    model = build_classifier(len(DISH_CLASSES), pretrained=not args.no_pretrained, arch=args.arch).to(device)
+    if args.init_checkpoint is not None:
+        init_path = args.init_checkpoint if args.init_checkpoint.is_absolute() else PROJECT_ROOT / args.init_checkpoint
+        model, init_classes, init_image_size, init_payload = load_checkpoint(init_path, device)
+        init_arch = str(init_payload.get("arch") or "")
+        if init_classes != DISH_CLASSES:
+            raise SystemExit(f"Init checkpoint class order does not match DISH_CLASSES: {init_path}")
+        if init_arch != args.arch:
+            raise SystemExit(f"Init checkpoint architecture is {init_arch}, requested {args.arch}")
+        if init_image_size != args.image_size:
+            raise SystemExit(f"Init checkpoint image size is {init_image_size}, requested {args.image_size}")
+        print(f"initialized_from: {init_path}")
+    else:
+        model = build_classifier(len(DISH_CLASSES), pretrained=not args.no_pretrained, arch=args.arch).to(device)
     loss_weights = None if args.no_weighted_loss else class_weight_tensor(train_ds.counts_by_class(), DISH_CLASSES, device)
     if args.loss == "focal":
         criterion = FocalLoss(weight=loss_weights, gamma=args.focal_gamma, label_smoothing=args.label_smoothing)
@@ -324,6 +337,7 @@ def main() -> None:
                     "focal_gamma": args.focal_gamma if args.loss == "focal" else None,
                     "weighted_loss": not args.no_weighted_loss,
                     "label_smoothing": args.label_smoothing,
+                    "init_checkpoint": str(args.init_checkpoint) if args.init_checkpoint else None,
                 },
                 arch=args.arch,
             )

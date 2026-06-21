@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 models/*.pt
+!models/dish_classifier.pt
 models/*.pth
 models/*.onnx
 outputs/
@@ -15,7 +16,6 @@ data/extras/
 data/classification/
 data/downloads/
 data/download/
-data/detection/
 data/scraped_candidates/
 data/processed_candidates/
 data/rejected_candidates/
@@ -23,5 +23,8 @@ data/temp_teacher_crops/
 data/archive/
 data/quarantine/
 data/scraped_manifest.csv
-ultralytics/
 runs/
+models/archive
+models/candidates
+.pytest_cache
+data/staging

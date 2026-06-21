@@ -24,9 +24,7 @@ from PIL import Image
 from canteen_checkout.config import (
     BILLS_DIR,
     CROPPED_DISHES_DIR,
-    DEFAULT_DETECTOR_PATH,
     DEFAULT_MODEL_PATH,
-    DEFAULT_REGION_DETECTOR_PATH,
     DEMO_TRAYS_DIR,
     DISH_CLASSES,
     ENGAGEMENT_DB_PATH,
@@ -35,12 +33,10 @@ from canteen_checkout.config import (
     PROJECT_ROOT,
 )
 from canteen_checkout.cropping import CropRegion, crop_regions, five_compartment_template, load_regions
-from canteen_checkout.detector import detect_objects, empty_evidence, fuse_decision, load_yolo_detector
 from canteen_checkout.engagement import EngagementError, EngagementStore
 from canteen_checkout.io_utils import load_prices
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 from canteen_checkout.pricing import THIT_KHO_TRUNG_CLASS, dish_price
-from canteen_checkout.region_detector import detect_food_regions
 
 
 UPLOAD_DIR = DEMO_TRAYS_DIR / "uploads"
@@ -50,8 +46,6 @@ DEMO_TEMPLATE_PATH = TEMPLATE_DIR / "demo_checkout.html"
 IGNORE_LABELS = {"ignore", "ignored", "unknown", "other", "extra"}
 
 MODEL_CACHE: dict[str, object] = {}
-DETECTOR_CACHE: dict[str, object] = {}
-REGION_DETECTOR_CACHE: dict[str, object] = {}
 ENGAGEMENT_STORE: EngagementStore | None = None
 
 
@@ -196,50 +190,11 @@ def regions_from_payload(payload: dict, image_path: Path) -> tuple[list[CropRegi
         return regions, metadata
 
     mode = str(payload.get("mode") or payload.get("region_mode") or "template")
-    threshold = float(payload.get("region_threshold", 0.35))
-    region_detector_path = resolve_project_path(str(payload.get("region_detector_path") or DEFAULT_REGION_DETECTOR_PATH))
     metadata: dict[str, object] = {
         "requested_mode": mode,
         "region_source": "template",
-        "region_detector_path": relative_or_absolute(region_detector_path) if region_detector_path.exists() else None,
-        "region_detector_loaded": False,
-        "region_threshold": threshold,
-        "raw_detection_count": 0,
-        "fallback_reason": "",
     }
-    if mode == "auto":
-        if region_detector_path.exists():
-            try:
-                detector = load_region_detector_once(region_detector_path)
-                result = detect_food_regions(
-                    detector,
-                    image_path,
-                    detector_path=region_detector_path,
-                    confidence=threshold,
-                )
-                metadata.update(
-                    {
-                        "region_detector_loaded": result.detector_loaded,
-                        "raw_detection_count": result.raw_detection_count,
-                        "fallback_reason": result.fallback_reason,
-                    }
-                )
-                if result.regions:
-                    regions = list(result.regions)
-                    metadata["region_source"] = "auto_detector"
-                    return regions, metadata
-            except Exception as exc:
-                metadata["fallback_reason"] = f"detector_error:{type(exc).__name__}"
-        else:
-            metadata["fallback_reason"] = "model_unavailable"
-
     regions = template_regions(payload, image_path)
-    if mode == "auto":
-        regions = [
-            CropRegion(region.name, region.x, region.y, region.w, region.h, region.label, "template_fallback", region.confidence)
-            for region in regions
-        ]
-        metadata["region_source"] = "template_fallback"
     return regions, metadata
 
 
@@ -255,26 +210,6 @@ def load_model_once(model_path: Path):
     return cached
 
 
-def load_detector_once(detector_path: Path):
-    key = str(detector_path.resolve())
-    cached = DETECTOR_CACHE.get(key)
-    if cached:
-        return cached
-    detector = load_yolo_detector(detector_path)
-    DETECTOR_CACHE[key] = detector
-    return detector
-
-
-def load_region_detector_once(detector_path: Path):
-    key = str(detector_path.resolve())
-    cached = REGION_DETECTOR_CACHE.get(key)
-    if cached:
-        return cached
-    detector = load_yolo_detector(detector_path)
-    REGION_DETECTOR_CACHE[key] = detector
-    return detector
-
-
 def run_checkout(payload: dict) -> dict:
     image_path = resolve_project_path(str(payload["image_path"]))
     if not image_path.exists():
@@ -283,9 +218,6 @@ def run_checkout(payload: dict) -> dict:
         raise ValueError("Only project files can be used in the demo app")
 
     model_path = resolve_project_path(str(payload.get("model_path") or DEFAULT_MODEL_PATH))
-    detector_path = resolve_project_path(str(payload.get("detector_path") or DEFAULT_DETECTOR_PATH))
-    use_detector = bool(payload.get("use_detector", True))
-    detector_threshold = float(payload.get("detector_threshold", 0.25))
     threshold = float(payload.get("threshold", 0.55))
     regions, region_metadata = regions_from_payload(payload, image_path)
 
@@ -303,12 +235,6 @@ def run_checkout(payload: dict) -> dict:
     if model_path.exists():
         model, class_names, model_image_size, _, device = load_model_once(model_path)
         model_loaded = True
-    detector = None
-    detector_loaded = False
-    if use_detector and detector_path.exists():
-        detector = load_detector_once(detector_path)
-        detector_loaded = True
-
     items = []
     total = 0
     for crop_path, region in zip(crop_paths, regions):
@@ -330,24 +256,7 @@ def run_checkout(payload: dict) -> dict:
             confidence = 0.0
             uncertain = True
 
-        raw_class_name = class_name
-        raw_confidence = confidence
-        evidence = empty_evidence(detector_path, detector_loaded)
-        fusion_reason = "classifier_only"
         final_egg_count = 1 if class_name == THIT_KHO_TRUNG_CLASS else None
-        if detector is not None and not ignored and not forced_label:
-            evidence = detect_objects(detector, crop_path, detector_path=detector_path, confidence=detector_threshold)
-            fusion = fuse_decision(
-                raw_class_name=raw_class_name,
-                raw_confidence=raw_confidence,
-                uncertain=uncertain,
-                evidence=evidence,
-            )
-            class_name = fusion.class_name
-            confidence = fusion.confidence
-            uncertain = fusion.uncertain
-            final_egg_count = fusion.egg_count
-            fusion_reason = fusion.fusion_reason
 
         price_row = prices.get(class_name)
         price_info = dish_price(
@@ -365,18 +274,12 @@ def run_checkout(payload: dict) -> dict:
                 "region_name": region.name,
                 "region_source": region.source,
                 "region_confidence": round(region.confidence, 4) if region.confidence is not None else None,
-                "raw_class_name": raw_class_name,
-                "raw_confidence": round(raw_confidence, 4),
                 "class_name": class_name,
                 "display_name": display_name,
                 "confidence": round(confidence, 4),
                 "uncertain": uncertain,
                 "ignored": ignored,
                 "egg_count": price_info.egg_count,
-                "fish_count": evidence.fish_count,
-                "detections": [detection.as_dict() for detection in evidence.detections],
-                "detector_evidence": evidence.as_dict(),
-                "fusion_reason": fusion_reason,
                 "price_vnd": price_info.total_price_vnd,
                 "base_price_vnd": price_info.base_price_vnd,
                 "extra_price_vnd": price_info.extra_price_vnd,
@@ -389,16 +292,8 @@ def run_checkout(payload: dict) -> dict:
         "image_path": relative_or_absolute(image_path),
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "model_path": relative_or_absolute(model_path) if model_path.exists() else None,
-        "detector_path": relative_or_absolute(detector_path) if detector_path.exists() else None,
-        "detector_loaded": detector_loaded,
-        "use_detector": use_detector,
         "threshold": threshold,
-        "detector_threshold": detector_threshold,
         "region_source": region_metadata.get("region_source", region_source(regions)),
-        "region_detector_path": region_metadata.get("region_detector_path"),
-        "region_detector_loaded": bool(region_metadata.get("region_detector_loaded", False)),
-        "region_threshold": float(region_metadata.get("region_threshold", payload.get("region_threshold", 0.35))),
-        "region_fallback_reason": str(region_metadata.get("fallback_reason") or ""),
         "items": items,
         "total_vnd": total,
         "bill_path": relative_or_absolute(bill_path),
@@ -473,9 +368,6 @@ def app_state() -> dict:
         "reward_catalog": reward_catalog(),
         "rating_summaries": store.rating_summaries(),
         "default_model_path": relative_or_absolute(DEFAULT_MODEL_PATH),
-        "default_detector_path": relative_or_absolute(DEFAULT_DETECTOR_PATH) if DEFAULT_DETECTOR_PATH.exists() else "",
-        "default_region_detector_path": relative_or_absolute(DEFAULT_REGION_DETECTOR_PATH) if DEFAULT_REGION_DETECTOR_PATH.exists() else "",
-        "region_detector_available": DEFAULT_REGION_DETECTOR_PATH.exists(),
     }
 
 

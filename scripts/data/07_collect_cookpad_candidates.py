@@ -24,7 +24,6 @@ from PIL import Image
 
 from canteen_checkout.config import (
     DATA_DIR,
-    DEFAULT_DETECTOR_PATH,
     DEFAULT_MODEL_PATH,
     DISH_CLASSES,
     IMAGE_EXTENSIONS,
@@ -37,7 +36,6 @@ from canteen_checkout.data_quality import (
     normalize_image,
     quality_reasons,
 )
-from canteen_checkout.detector import detect_objects, load_yolo_detector
 from canteen_checkout.io_utils import list_images
 from canteen_checkout.model import eval_transforms, load_checkpoint, resolve_device
 
@@ -167,6 +165,15 @@ DEFAULT_QUERIES_BY_CLASS = {
         "tofu tomato sauce",
         "Vietnamese tofu tomato sauce",
     ],
+    "suon_nuong": [
+        "cơm tấm sườn nướng",
+        "cơm sườn nướng",
+        "sườn cốt lết nướng",
+        "cốt lết nướng",
+        "cơm phần sườn nướng",
+        "khay cơm sườn nướng",
+        "Vietnamese grilled pork chop rice",
+    ],
 }
 
 TEXT_FILTERS = {
@@ -271,6 +278,33 @@ TEXT_FILTERS = {
             "bánh",
         ],
         "model_allow": {"dau_hu_sot_ca"},
+    },
+    "suon_nuong": {
+        "positive": [
+            "cơm tấm",
+            "cơm sườn",
+            "sườn nướng",
+            "sườn cốt lết",
+            "cốt lết nướng",
+            "grilled pork chop",
+            "pork chop rice",
+        ],
+        "negative": [
+            "sườn non",
+            "sườn que",
+            "sườn cây",
+            "bbq ribs",
+            "pork ribs",
+            "sườn xào",
+            "sườn rim",
+            "sườn chua ngọt",
+            "canh sườn",
+            "cháo sườn",
+            "bún",
+            "mì",
+            "lẩu",
+        ],
+        "model_allow": {"suon_nuong"},
     },
 }
 
@@ -512,7 +546,6 @@ def write_manifest(path: Path, rows: list[dict[str, object]]) -> None:
         "sha256",
         "phash",
         "top_predictions",
-        "fish_count",
     ]
     with path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -530,10 +563,7 @@ def main() -> None:
     parser.add_argument("--delay", type=float, default=0.25)
     parser.add_argument("--phash-threshold", type=int, default=8)
     parser.add_argument("--min-target-confidence", type=float, default=0.12)
-    parser.add_argument("--fish-threshold", type=float, default=0.25)
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
-    parser.add_argument("--detector", type=Path, default=DEFAULT_DETECTOR_PATH)
-    parser.add_argument("--no-detector", action="store_true")
     parser.add_argument("--review-dir", type=Path, default=None, help="Append accepted images to an existing review folder.")
     parser.add_argument("--queries-file", type=Path, default=None, help="UTF-8 text file with one query per line.")
     parser.add_argument("--query", action="append", default=[])
@@ -591,13 +621,6 @@ def main() -> None:
     else:
         print(f"Classifier not found: {args.model}. Model gate disabled.")
 
-    detector = None
-    if not args.no_detector and args.detector.exists():
-        detector = load_yolo_detector(args.detector)
-        print(f"Loaded detector: {args.detector}")
-    elif not args.no_detector:
-        print(f"Detector not found: {args.detector}. Fish gate disabled.")
-
     review_dir.mkdir(parents=True, exist_ok=True)
     temp_dir.mkdir(parents=True, exist_ok=True)
     existing_output_count = sum(1 for path in review_dir.iterdir() if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS)
@@ -653,7 +676,6 @@ def main() -> None:
                     "sha256": "",
                     "phash": "",
                     "top_predictions": "",
-                    "fish_count": "",
                 }
                 try:
                     candidate = parse_recipe(session, recipe_url, query, args.delay)
@@ -712,19 +734,6 @@ def main() -> None:
                         ok, reason = model_filter(top_predictions, args.target_class, args.min_target_confidence)
                         if not ok:
                             row["reason"] = reason
-                            row["sha256"] = metrics.sha256
-                            row["phash"] = metrics.phash
-                            temp_path.unlink(missing_ok=True)
-                            rows.append(row)
-                            continue
-
-                    fish_count = 0
-                    if detector is not None:
-                        evidence = detect_objects(detector, temp_path, detector_path=args.detector, confidence=args.fish_threshold)
-                        fish_count = evidence.fish_count
-                        row["fish_count"] = fish_count
-                        if fish_count > 0:
-                            row["reason"] = "detector_found_fish"
                             row["sha256"] = metrics.sha256
                             row["phash"] = metrics.phash
                             temp_path.unlink(missing_ok=True)
